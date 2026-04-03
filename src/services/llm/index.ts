@@ -11,6 +11,9 @@ interface ProviderState {
   consecutiveFailures: number;
   lastFailureTime: number | null;
   isCircuitOpen: boolean;
+  lastFailureConfigSignature: string | null;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
 }
 
 interface ProviderStatus {
@@ -20,6 +23,13 @@ interface ProviderStatus {
   secondaryCircuitOpen: boolean;
   primaryFailures: number;
   secondaryFailures: number;
+  primaryLastErrorCode: string | null;
+  primaryLastErrorMessage: string | null;
+  primaryLastFailureAt: string | null;
+  secondaryLastErrorCode: string | null;
+  secondaryLastErrorMessage: string | null;
+  secondaryLastFailureAt: string | null;
+  lastSwitchReason: string | null;
 }
 
 const providerState: Record<LLMProvider, ProviderState> = {
@@ -27,13 +37,21 @@ const providerState: Record<LLMProvider, ProviderState> = {
     consecutiveFailures: 0,
     lastFailureTime: null,
     isCircuitOpen: false,
+    lastFailureConfigSignature: null,
+    lastErrorCode: null,
+    lastErrorMessage: null,
   },
   ollama: {
     consecutiveFailures: 0,
     lastFailureTime: null,
     isCircuitOpen: false,
+    lastFailureConfigSignature: null,
+    lastErrorCode: null,
+    lastErrorMessage: null,
   },
 };
+
+let lastSwitchReason: string | null = null;
 
 const geminiClient = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
@@ -64,6 +82,7 @@ function getCooldownMs(): number {
 }
 
 function logSwitch(reason: string, activeProvider: LLMProvider): void {
+  lastSwitchReason = reason;
   console.warn(
     `[${nowIso()}] [LLM] Provider switch: active=${activeProvider}; reason=${reason}`,
   );
@@ -74,19 +93,58 @@ function markSuccess(provider: LLMProvider): void {
     consecutiveFailures: 0,
     lastFailureTime: null,
     isCircuitOpen: false,
+    lastFailureConfigSignature: null,
+    lastErrorCode: null,
+    lastErrorMessage: null,
   };
 }
 
-function markFailure(provider: LLMProvider): void {
+function getErrorDetails(error: unknown): {
+  code: string;
+  message: string;
+} {
+  if (error instanceof Error) {
+    const msg = error.message || "UNKNOWN_ERROR";
+    const code = msg.split(":")[0].trim().slice(0, 100) || "UNKNOWN_ERROR";
+    return {
+      code,
+      message: msg.slice(0, 300),
+    };
+  }
+
+  const raw = String(error || "UNKNOWN_ERROR");
+  return {
+    code: raw.split(":")[0].trim().slice(0, 100) || "UNKNOWN_ERROR",
+    message: raw.slice(0, 300),
+  };
+}
+
+function getProviderConfigSignature(provider: LLMProvider): string {
+  if (provider === "gemini") {
+    const model = process.env.GEMINI_MODEL || "gemini-flash-lite-latest";
+    const key = process.env.GEMINI_API_KEY || "";
+    return `gemini:${model}:klen${key.length}:tail${key.slice(-4)}`;
+  }
+
+  const baseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
+  const model = process.env.OLLAMA_MODEL || "llama3.1";
+  return `ollama:${baseUrl}:${model}`;
+}
+
+function markFailure(provider: LLMProvider, error: unknown): void {
   const maxFailures = getMaxFailures();
   const prev = providerState[provider];
   const nextFailures = prev.consecutiveFailures + 1;
   const shouldOpenCircuit = nextFailures >= maxFailures;
+  const errorDetails = getErrorDetails(error);
 
   providerState[provider] = {
     consecutiveFailures: nextFailures,
     lastFailureTime: Date.now(),
     isCircuitOpen: shouldOpenCircuit,
+    lastFailureConfigSignature: getProviderConfigSignature(provider),
+    lastErrorCode: errorDetails.code,
+    lastErrorMessage: errorDetails.message,
   };
 }
 
@@ -152,21 +210,33 @@ async function executeWithFallback<T>(
   const primary = getPrimaryProvider();
   const secondary = getSecondaryProvider(primary);
   const primaryState = providerState[primary];
+  const currentPrimarySig = getProviderConfigSignature(primary);
+  const configChangedSinceFailure =
+    primaryState.lastFailureConfigSignature !== null &&
+    primaryState.lastFailureConfigSignature !== currentPrimarySig;
 
-  if (primaryState.isCircuitOpen && !isCooldownElapsed(primary)) {
+  if (
+    primaryState.isCircuitOpen &&
+    !isCooldownElapsed(primary) &&
+    !configChangedSinceFailure
+  ) {
     logSwitch("primary circuit open; cooldown active", secondary);
     try {
       const secondaryResult = await operation(secondary);
       markSuccess(secondary);
       return secondaryResult;
     } catch (secondaryError) {
-      markFailure(secondary);
+      markFailure(secondary, secondaryError);
       throw secondaryError;
     }
   }
 
-  if (primaryState.isCircuitOpen && isCooldownElapsed(primary)) {
-    logSwitch("primary cooldown elapsed; half-open probe", primary);
+  if (primaryState.isCircuitOpen) {
+    if (configChangedSinceFailure) {
+      logSwitch("primary config changed; early half-open probe", primary);
+    } else if (isCooldownElapsed(primary)) {
+      logSwitch("primary cooldown elapsed; half-open probe", primary);
+    }
   }
 
   try {
@@ -178,15 +248,20 @@ async function executeWithFallback<T>(
     }
     return primaryResult;
   } catch (primaryError) {
-    markFailure(primary);
+    markFailure(primary, primaryError);
+    const primaryErrorDetails = getErrorDetails(primaryError);
+    const fallbackReason = `primary failed (${primaryErrorDetails.code})`;
 
     if (providerState[primary].isCircuitOpen) {
       logSwitch(
-        `primary reached failure threshold (${getMaxFailures()}); opening circuit`,
+        `${fallbackReason}; reached failure threshold (${getMaxFailures()}); opening circuit`,
         secondary,
       );
     } else {
-      logSwitch("primary failed; temporary fallback to secondary", secondary);
+      logSwitch(
+        `${fallbackReason}; temporary fallback to secondary`,
+        secondary,
+      );
     }
 
     try {
@@ -194,7 +269,7 @@ async function executeWithFallback<T>(
       markSuccess(secondary);
       return secondaryResult;
     } catch (secondaryError) {
-      markFailure(secondary);
+      markFailure(secondary, secondaryError);
       throw secondaryError instanceof Error ? secondaryError : primaryError;
     }
   }
@@ -210,6 +285,17 @@ export function getLLMProviderStatus(): ProviderStatus {
     secondaryCircuitOpen: providerState[secondary].isCircuitOpen,
     primaryFailures: providerState[primary].consecutiveFailures,
     secondaryFailures: providerState[secondary].consecutiveFailures,
+    primaryLastErrorCode: providerState[primary].lastErrorCode,
+    primaryLastErrorMessage: providerState[primary].lastErrorMessage,
+    primaryLastFailureAt: providerState[primary].lastFailureTime
+      ? new Date(providerState[primary].lastFailureTime).toISOString()
+      : null,
+    secondaryLastErrorCode: providerState[secondary].lastErrorCode,
+    secondaryLastErrorMessage: providerState[secondary].lastErrorMessage,
+    secondaryLastFailureAt: providerState[secondary].lastFailureTime
+      ? new Date(providerState[secondary].lastFailureTime).toISOString()
+      : null,
+    lastSwitchReason,
   };
 }
 
