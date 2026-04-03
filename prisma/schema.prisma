@@ -9,6 +9,7 @@ datasource db {
 
 model Analysis {
   id          Int      @id @default(autoincrement())
+  userId      String   @map("user_id")
   owner       String
   repo        String
   fullName    String   @map("full_name")
@@ -18,6 +19,6 @@ model Analysis {
   summary     Json
   narrative   Json
 
-  @@unique([owner, repo])
+  @@unique([userId, owner, repo])
   @@map("analyses")
 }
