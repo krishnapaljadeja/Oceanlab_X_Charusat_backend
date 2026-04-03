@@ -109,8 +109,9 @@ async function generateTextWithProvider(
   prompt: string,
 ): Promise<string> {
   if (provider === "gemini") {
+    const modelName = process.env.GEMINI_MODEL || "gemini-flash-lite-latest";
     const model = geminiClient.getGenerativeModel({
-      model: "gemini-2.5-flash",
+      model: modelName,
     });
     const result = await model.generateContent(prompt);
     return result.response.text();

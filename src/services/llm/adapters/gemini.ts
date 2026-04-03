@@ -8,10 +8,11 @@ export async function generateWithGemini(
   summary: AnalysisSummary,
 ): Promise<GeneratedNarrative> {
   const prompt = buildPrompt(summary);
+  const modelName = process.env.GEMINI_MODEL || "gemini-flash-lite-latest";
 
   let responseText: string;
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const model = genAI.getGenerativeModel({ model: modelName });
     const result = await model.generateContent(prompt);
     responseText = result.response.text();
   } catch (err: unknown) {

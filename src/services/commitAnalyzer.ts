@@ -265,7 +265,7 @@ export function normalizeContributors(
   rawContributors: RawContributor[],
   processedCommits: ProcessedCommit[],
 ): NormalizedContributor[] {
-  return rawContributors
+  const contributors = rawContributors
     .filter((c) => !isBot(c.login, c.login))
     .map((contributor) => {
       const authorCommits = processedCommits.filter(
@@ -291,12 +291,17 @@ export function normalizeContributors(
         name: authorCommits[0]?.author || contributor.login,
         login: contributor.login,
         emails: [...new Set(authorCommits.map((c) => c.authorEmail))],
-        commitCount: contributor.contributions,
+        // Use filtered commit window count, not all-time GitHub contributions.
+        commitCount: authorCommits.length,
         firstCommitDate: dates[0] || "",
         lastCommitDate: dates[dates.length - 1] || "",
         primaryAreas,
       };
-    });
+    })
+    .filter((c) => c.commitCount > 0)
+    .sort((a, b) => b.commitCount - a.commitCount);
+
+  return contributors;
 }
 
 // Calculate overall commit quality score (0-100)
