@@ -9,6 +9,7 @@ import {
   fetchAllCommitMetadata,
   selectSignificantCommits,
   fetchCommitDetails,
+  fetchContributorCommitMetadata,
 } from "../services/commitFetcher";
 import {
   processCommits,
@@ -18,9 +19,11 @@ import {
 } from "../services/commitAnalyzer";
 import { detectPhases } from "../services/phaseDetector";
 import { detectMilestones } from "../services/milestoneDetector";
-import { generateNarrative } from "../services/llm";
+import { generateNarrative, getLLMProviderStatus } from "../services/llm";
 import { buildPrompt } from "../services/llm/prompt";
-import { getRateLimitStatus } from "../services/githubClient";
+import { getRateLimitStatus, githubAxios } from "../services/githubClient";
+import { buildContributorProfile } from "../services/contributorAnalyzer";
+import { generateRepoDocs } from "../services/readmeGenerator";
 import {
   AnalysisSummary,
   AnalysisResponse,
@@ -32,6 +35,8 @@ import {
   HeatmapWeek,
   HeatmapStats,
   HeatmapResponse,
+  AnalysisFilters,
+  RawCommit,
 } from "../types";
 import {
   getStoredAnalysis,
@@ -40,17 +45,25 @@ import {
   deleteAnalysis,
 } from "../db/queries";
 import { checkStaleness } from "../utils/stalenessChecker";
-import { getAuthUserId, requireAuth, AuthenticatedRequest } from "../middleware/auth";
+import {
+  getAuthUserId,
+  requireAuth,
+  AuthenticatedRequest,
+} from "../middleware/auth";
 
 const MIN_COMMITS = parseInt(process.env.MIN_COMMITS_REQUIRED || "10");
 
 export const analyzeRouter = Router();
 
 analyzeRouter.use(["/analyze", "/history", "/heatmap"], requireAuth);
+analyzeRouter.use(["/llm/status"], requireAuth);
+analyzeRouter.use(["/contributors/profile"], requireAuth);
+analyzeRouter.use(["/docs/generate"], requireAuth);
 
 async function runFullAnalysis(
   owner: string,
   repo: string,
+  filters?: AnalysisFilters,
 ): Promise<{
   repoMeta: RepoMeta;
   summary: AnalysisSummary;
@@ -65,6 +78,7 @@ async function runFullAnalysis(
   const { commits: rawCommits, isCapped } = await fetchAllCommitMetadata(
     owner,
     repo,
+    filters,
   );
 
   if (rawCommits.length < MIN_COMMITS) {
@@ -113,19 +127,184 @@ async function runFullAnalysis(
   return { repoMeta, summary, narrative };
 }
 
+function parseAnalysisFilters(input: unknown): AnalysisFilters | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const raw = input as Partial<AnalysisFilters>;
+
+  const dateRangeRaw = raw.dateRange || { type: "all" };
+  const dateRangeType = dateRangeRaw.type;
+  if (
+    dateRangeType !== "all" &&
+    dateRangeType !== "last_n_months" &&
+    dateRangeType !== "last_n_commits" &&
+    dateRangeType !== "custom"
+  ) {
+    return undefined;
+  }
+
+  return {
+    dateRange: {
+      type: dateRangeType,
+      months:
+        typeof dateRangeRaw.months === "number"
+          ? dateRangeRaw.months
+          : undefined,
+      commitCount:
+        typeof dateRangeRaw.commitCount === "number"
+          ? dateRangeRaw.commitCount
+          : undefined,
+      from:
+        typeof dateRangeRaw.from === "string" ? dateRangeRaw.from : undefined,
+      to: typeof dateRangeRaw.to === "string" ? dateRangeRaw.to : undefined,
+    },
+    excludeMergeCommits: Boolean(raw.excludeMergeCommits),
+    branchFilter:
+      typeof raw.branchFilter === "string" ? raw.branchFilter : undefined,
+    pathFilter: typeof raw.pathFilter === "string" ? raw.pathFilter : undefined,
+    minLinesChanged:
+      typeof raw.minLinesChanged === "number" ? raw.minLinesChanged : undefined,
+  };
+}
+
+function hasCustomFilters(filters?: AnalysisFilters): boolean {
+  if (!filters) return false;
+  if (filters.excludeMergeCommits) return true;
+  if (filters.branchFilter) return true;
+  if (filters.pathFilter) return true;
+  if (filters.minLinesChanged && filters.minLinesChanged > 0) return true;
+  if (filters.dateRange.type !== "all") return true;
+  if (filters.dateRange.commitCount && filters.dateRange.commitCount > 0) {
+    return true;
+  }
+  return false;
+}
+
+async function fetchCommitDetailsInBatches(
+  owner: string,
+  repo: string,
+  commits: RawCommit[],
+  batchSize: number = 10,
+): Promise<RawCommit[]> {
+  const detailed: RawCommit[] = [];
+
+  for (let i = 0; i < commits.length; i += batchSize) {
+    const batch = commits.slice(i, i + batchSize);
+    const fetched = await Promise.all(
+      batch.map(async (commit) => {
+        try {
+          const { data } = await githubAxios.get(
+            `/repos/${owner}/${repo}/commits/${commit.sha}`,
+          );
+          return data as RawCommit;
+        } catch {
+          return commit;
+        }
+      }),
+    );
+    detailed.push(...fetched);
+  }
+
+  return detailed;
+}
+
+analyzeRouter.post(
+  "/docs/generate",
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      getAuthUserId(req);
+      const { repoUrl } = req.body as { repoUrl?: string };
+
+      if (!repoUrl || typeof repoUrl !== "string") {
+        throw new Error("INVALID_URL");
+      }
+      const docs = await generateRepoDocs(repoUrl);
+      return res.json({ success: true, docs });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+analyzeRouter.post(
+  "/contributors/profile",
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      getAuthUserId(req);
+      const { repoUrl, login, filters } = req.body as {
+        repoUrl?: string;
+        login?: string;
+        filters?: AnalysisFilters;
+      };
+
+      if (!repoUrl || typeof repoUrl !== "string") {
+        throw new Error("INVALID_URL");
+      }
+      if (!login || typeof login !== "string") {
+        throw new Error("INVALID_REQUEST");
+      }
+
+      const { owner, repo } = parseGitHubUrl(repoUrl);
+      const activeFilters = parseAnalysisFilters(filters);
+
+      const { commits } = await fetchContributorCommitMetadata(
+        owner,
+        repo,
+        login,
+        activeFilters,
+      );
+
+      if (commits.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "No commits found for this contributor in the selected range.",
+          code: "NOT_FOUND",
+        });
+      }
+
+      const detailedCommits = await fetchCommitDetailsInBatches(
+        owner,
+        repo,
+        commits,
+      );
+      const firstWithAvatar = commits.find(
+        (commit) => commit.author?.avatar_url,
+      );
+      const avatarUrl = firstWithAvatar?.author?.avatar_url || "";
+
+      const profile = await buildContributorProfile(
+        login,
+        detailedCommits,
+        avatarUrl,
+      );
+
+      return res.json({ success: true, profile });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 analyzeRouter.post(
   "/analyze",
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const userId = getAuthUserId(req);
-      const { repoUrl } = req.body as { repoUrl?: string };
+      const { repoUrl, filters } = req.body as {
+        repoUrl?: string;
+        filters?: AnalysisFilters;
+      };
       if (!repoUrl || typeof repoUrl !== "string") {
         throw new Error("INVALID_URL");
       }
 
+      const activeFilters = parseAnalysisFilters(filters);
+
       const { owner, repo } = parseGitHubUrl(repoUrl);
 
-      const stored = await getStoredAnalysis(userId, owner, repo);
+      const customFilters = hasCustomFilters(activeFilters);
+      const stored = customFilters
+        ? null
+        : await getStoredAnalysis(userId, owner, repo);
       if (stored) {
         console.log(`[Analyze] Returning stored result for ${owner}/${repo}`);
         const staleness = await checkStaleness(
@@ -155,6 +334,7 @@ analyzeRouter.post(
       const { repoMeta, summary, narrative } = await runFullAnalysis(
         owner,
         repo,
+        activeFilters,
       );
 
       await saveAnalysis(
@@ -200,10 +380,15 @@ analyzeRouter.post(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const userId = getAuthUserId(req);
-      const { repoUrl } = req.body as { repoUrl?: string };
+      const { repoUrl, filters } = req.body as {
+        repoUrl?: string;
+        filters?: AnalysisFilters;
+      };
       if (!repoUrl || typeof repoUrl !== "string") {
         throw new Error("INVALID_URL");
       }
+
+      const activeFilters = parseAnalysisFilters(filters);
 
       const { owner, repo } = parseGitHubUrl(repoUrl);
       console.log(`[Analyze] Forced refresh for ${owner}/${repo}`);
@@ -213,6 +398,7 @@ analyzeRouter.post(
       const { repoMeta, summary, narrative } = await runFullAnalysis(
         owner,
         repo,
+        activeFilters,
       );
 
       await saveAnalysis(
@@ -259,10 +445,15 @@ analyzeRouter.post(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       getAuthUserId(req);
-      const { repoUrl } = req.body as { repoUrl?: string };
+      const { repoUrl, filters } = req.body as {
+        repoUrl?: string;
+        filters?: AnalysisFilters;
+      };
       if (!repoUrl || typeof repoUrl !== "string") {
         throw new Error("INVALID_URL");
       }
+
+      const activeFilters = parseAnalysisFilters(filters);
 
       const { owner, repo } = parseGitHubUrl(repoUrl);
       console.log(`[Preview] Fetching raw data for ${owner}/${repo}`);
@@ -276,6 +467,7 @@ analyzeRouter.post(
       const { commits: rawCommits, isCapped } = await fetchAllCommitMetadata(
         owner,
         repo,
+        activeFilters,
       );
 
       if (rawCommits.length < MIN_COMMITS) {
@@ -380,6 +572,18 @@ analyzeRouter.get(
         };
       });
       return res.json({ success: true, history });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+analyzeRouter.get(
+  "/llm/status",
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const status = getLLMProviderStatus();
+      return res.json({ success: true, llmStatus: status });
     } catch (err) {
       next(err);
     }

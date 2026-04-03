@@ -1,25 +1,164 @@
 import { paginateAll, githubAxios } from "./githubClient";
-import { RawCommit } from "../types";
+import { RawCommit, AnalysisFilters } from "../types";
 
 const MAX_COMMITS = parseInt(process.env.MAX_COMMITS_TO_FETCH || "1000");
 const MAX_DETAILED = parseInt(process.env.MAX_DETAILED_COMMITS || "50");
+
+const DEFAULT_FILTERS: AnalysisFilters = {
+  dateRange: { type: "all" },
+  excludeMergeCommits: false,
+};
+
+function toIsoMonthsAgo(months: number): string {
+  const date = new Date();
+  date.setMonth(date.getMonth() - months);
+  return date.toISOString();
+}
+
+function normalizeFilters(filters?: AnalysisFilters): AnalysisFilters {
+  return {
+    ...DEFAULT_FILTERS,
+    ...filters,
+    dateRange: {
+      ...DEFAULT_FILTERS.dateRange,
+      ...(filters?.dateRange || {}),
+    },
+  };
+}
+
+function buildCommitParams(
+  activeFilters: AnalysisFilters,
+  extra: Record<string, string> = {},
+): Record<string, string | number> {
+  const params: Record<string, string | number> = { ...extra };
+
+  if (activeFilters.dateRange.type === "last_n_months") {
+    const months = activeFilters.dateRange.months ?? 3;
+    params.since = toIsoMonthsAgo(months);
+  }
+  if (activeFilters.dateRange.type === "custom") {
+    if (activeFilters.dateRange.from) {
+      params.since = new Date(activeFilters.dateRange.from).toISOString();
+    }
+    if (activeFilters.dateRange.to) {
+      params.until = new Date(activeFilters.dateRange.to).toISOString();
+    }
+  }
+  if (activeFilters.branchFilter) {
+    params.sha = activeFilters.branchFilter;
+  }
+  if (activeFilters.pathFilter) {
+    params.path = activeFilters.pathFilter;
+  }
+
+  return params;
+}
+
+async function withStatsIfNeeded(
+  owner: string,
+  repo: string,
+  commit: RawCommit,
+): Promise<RawCommit> {
+  if (commit.stats) return commit;
+  try {
+    const { data } = await githubAxios.get<RawCommit>(
+      `/repos/${owner}/${repo}/commits/${commit.sha}`,
+    );
+    return data;
+  } catch {
+    return commit;
+  }
+}
 
 // Step 1: Fetch all commit metadata (no diff stats yet)
 export async function fetchAllCommitMetadata(
   owner: string,
   repo: string,
+  filters?: AnalysisFilters,
 ): Promise<{ commits: RawCommit[]; isCapped: boolean }> {
-  const commits = await paginateAll<RawCommit>(
+  const activeFilters = normalizeFilters(filters);
+  const params = buildCommitParams(activeFilters);
+
+  const fetched = await paginateAll<RawCommit>(
     `/repos/${owner}/${repo}/commits`,
-    {},
+    params,
     MAX_COMMITS + 1, // fetch one extra to detect capping
   );
 
-  const isCapped = commits.length > MAX_COMMITS;
+  const isCapped = fetched.length > MAX_COMMITS;
+  let commits = fetched.slice(0, MAX_COMMITS);
+
+  if (activeFilters.excludeMergeCommits) {
+    commits = commits.filter((commit) => (commit.parents?.length ?? 1) <= 1);
+  }
+
+  if (activeFilters.minLinesChanged && activeFilters.minLinesChanged > 0) {
+    const enriched = await Promise.all(
+      commits.map((commit) => withStatsIfNeeded(owner, repo, commit)),
+    );
+
+    commits = enriched.filter((commit) => {
+      const added = commit.stats?.additions ?? 0;
+      const deleted = commit.stats?.deletions ?? 0;
+      return added + deleted >= activeFilters.minLinesChanged!;
+    });
+  }
+
+  if (
+    activeFilters.dateRange.commitCount &&
+    activeFilters.dateRange.commitCount > 0
+  ) {
+    commits = commits.slice(0, activeFilters.dateRange.commitCount);
+  }
+
   return {
-    commits: commits.slice(0, MAX_COMMITS),
+    commits,
     isCapped,
   };
+}
+
+export async function fetchContributorCommitMetadata(
+  owner: string,
+  repo: string,
+  login: string,
+  filters?: AnalysisFilters,
+): Promise<{ commits: RawCommit[]; isCapped: boolean }> {
+  const activeFilters = normalizeFilters(filters);
+  const params = buildCommitParams(activeFilters, { author: login });
+
+  const fetched = await paginateAll<RawCommit>(
+    `/repos/${owner}/${repo}/commits`,
+    params,
+    MAX_COMMITS + 1,
+  );
+
+  const isCapped = fetched.length > MAX_COMMITS;
+  let commits = fetched.slice(0, MAX_COMMITS);
+
+  if (activeFilters.excludeMergeCommits) {
+    commits = commits.filter((commit) => (commit.parents?.length ?? 1) <= 1);
+  }
+
+  if (activeFilters.minLinesChanged && activeFilters.minLinesChanged > 0) {
+    const enriched = await Promise.all(
+      commits.map((commit) => withStatsIfNeeded(owner, repo, commit)),
+    );
+
+    commits = enriched.filter((commit) => {
+      const added = commit.stats?.additions ?? 0;
+      const deleted = commit.stats?.deletions ?? 0;
+      return added + deleted >= activeFilters.minLinesChanged!;
+    });
+  }
+
+  if (
+    activeFilters.dateRange.commitCount &&
+    activeFilters.dateRange.commitCount > 0
+  ) {
+    commits = commits.slice(0, activeFilters.dateRange.commitCount);
+  }
+
+  return { commits, isCapped };
 }
 
 // Step 2: Score a commit to determine if it's worth fetching details for

@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import { analyzeRouter } from "./routes/analyze";
 import { qaRouter } from "./routes/qa";
+import { ingestRouter } from "./routes/ingest";
 import { errorHandler } from "./middleware/errorHandler";
 import { testConnection } from "./db/client";
 
@@ -31,6 +32,7 @@ app.use((req, _res, next) => {
 
 app.use("/api", analyzeRouter);
 app.use("/api", qaRouter);
+app.use("/api", ingestRouter);
 
 // 404 handler
 app.use((_req, res) => {
