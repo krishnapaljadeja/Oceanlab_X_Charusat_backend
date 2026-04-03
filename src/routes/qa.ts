@@ -20,12 +20,29 @@ interface OllamaApiResponse {
   };
 }
 
+function getGeminiMaxOutputTokens(): number {
+  const raw = process.env.GEMINI_MAX_OUTPUT_TOKENS;
+  const parsed = Number.parseInt(raw || "", 10);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 1024;
+  }
+
+  return parsed;
+}
+
 async function callLLM(prompt: string): Promise<string> {
   const provider = process.env.LLM_PROVIDER || "gemini";
 
   if (provider === "gemini") {
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    // const model = genAI.getGenerativeModel({
+    //   model: "gemini-2.5-flash",
+    //   generationConfig: {
+    //     maxOutputTokens: getGeminiMaxOutputTokens(),
+    //   },
+    // });
     const result = await model.generateContent(prompt);
     return result.response.text();
   }

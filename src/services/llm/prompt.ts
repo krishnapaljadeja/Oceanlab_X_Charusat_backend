@@ -55,6 +55,7 @@ CRITICAL RULES:
 3. Be specific and technical — mention actual file names, phases, and dates where relevant.
 4. Write in past tense, third person, as if narrating a documentary.
 5. Return ONLY valid JSON. No markdown, no preamble, no backticks.
+6. narrativeChapters should track the development phases: aim for one chapter per phase in the provided phases data (or very close), not a small fixed number of broad chapters.
 
 REPOSITORY DATA:
 ${JSON.stringify(data, null, 2)}

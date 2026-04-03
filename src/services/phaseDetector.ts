@@ -121,28 +121,7 @@ export function detectPhases(commits: ProcessedCommit[]): DevelopmentPhase[] {
     phase.name = `${phase.label} (${phase.startDate.substring(0, 7)})`;
   });
 
-  // Merge adjacent phases with the same label
-  const merged: DevelopmentPhase[] = [];
-  rawPhases.forEach((phase) => {
-    const last = merged[merged.length - 1];
-    if (last && last.label === phase.label) {
-      // Extend last phase
-      last.endDate = phase.endDate;
-      last.commitCount += phase.commitCount;
-      last.keyFiles = [...new Set([...last.keyFiles, ...phase.keyFiles])].slice(
-        0,
-        5,
-      );
-      last.contributors = [
-        ...new Set([...last.contributors, ...phase.contributors]),
-      ];
-      (Object.keys(phase.commitTypeBreakdown) as CommitType[]).forEach((k) => {
-        last.commitTypeBreakdown[k] += phase.commitTypeBreakdown[k];
-      });
-    } else {
-      merged.push({ ...phase });
-    }
-  });
-
-  return merged;
+  // Keep monthly phases distinct so timeline and chapter pagination reflect
+  // the full project evolution instead of collapsing many months into a few labels.
+  return rawPhases;
 }

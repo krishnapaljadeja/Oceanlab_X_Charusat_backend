@@ -53,6 +53,77 @@ const providerState: Record<LLMProvider, ProviderState> = {
 
 let lastSwitchReason: string | null = null;
 
+function toDate(value: string): number {
+  const ts = new Date(value).getTime();
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function findMilestonesInRange(
+  summary: AnalysisSummary,
+  from: string,
+  to: string,
+): string[] {
+  const fromTs = toDate(from);
+  const toTs = toDate(to);
+
+  return summary.milestones
+    .filter((m) => {
+      const ts = toDate(m.date);
+      return ts >= fromTs && ts <= toTs;
+    })
+    .slice(0, 2)
+    .map((m) => `${m.title} (${m.date.substring(0, 10)})`);
+}
+
+function normalizeNarrativeChapters(
+  summary: AnalysisSummary,
+  narrative: GeneratedNarrative,
+): GeneratedNarrative {
+  const phaseCount = summary.phases.length;
+  if (phaseCount <= 0) return narrative;
+
+  const current = narrative.narrativeChapters || [];
+  if (current.length >= phaseCount) return narrative;
+
+  const expanded = summary.phases.map((phase, index) => {
+    const sourceIndex = Math.min(
+      current.length - 1,
+      Math.floor((index * Math.max(current.length, 1)) / phaseCount),
+    );
+    const source = current[sourceIndex] || current[0];
+    const phasePeriod = `${phase.startDate.substring(0, 10)} to ${phase.endDate.substring(0, 10)}`;
+    const milestoneEvents = findMilestonesInRange(
+      summary,
+      phase.startDate,
+      phase.endDate,
+    );
+
+    const keyEvents = [
+      `${phase.commitCount} commits with ${phase.velocity} velocity`,
+      `Dominant activity: ${phase.label} (${phase.dominantType})`,
+      phase.keyFiles[0]
+        ? `Most touched file: ${phase.keyFiles[0]}`
+        : `Primary contributors: ${phase.contributors.slice(0, 2).join(", ") || "unknown"}`,
+      ...milestoneEvents,
+    ].slice(0, 5);
+
+    return {
+      title:
+        source?.title || `${phase.label} - ${phase.startDate.substring(0, 7)}`,
+      period: phasePeriod,
+      story:
+        source?.story ||
+        `${phase.label} activity was observed during this period with ${phase.commitCount} commits. The work pattern was ${phase.velocity} velocity and focused on ${phase.dominantType} changes.`,
+      keyEvents,
+    };
+  });
+
+  return {
+    ...narrative,
+    narrativeChapters: expanded,
+  };
+}
+
 const geminiClient = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
 function nowIso(): string {
@@ -309,9 +380,11 @@ export async function generateNarrative(
     );
   }
 
-  return executeWithFallback((provider) =>
+  const narrative = await executeWithFallback((provider) =>
     generateNarrativeWithProvider(provider, summary),
   );
+
+  return normalizeNarrativeChapters(summary, narrative);
 }
 
 export async function generateText(prompt: string): Promise<string> {
