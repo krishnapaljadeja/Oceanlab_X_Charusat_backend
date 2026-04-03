@@ -40,6 +40,22 @@ export function errorHandler(
         "This repository has too few commits for a meaningful analysis. At least 10 commits are required.",
       code: "TOO_FEW_COMMITS",
     },
+    AUTH_REQUIRED: {
+      status: 401,
+      message: "Please login to continue.",
+      code: "AUTH_REQUIRED",
+    },
+    AUTH_INVALID: {
+      status: 401,
+      message: "Your login session is invalid or expired. Please login again.",
+      code: "AUTH_INVALID",
+    },
+    AUTH_CONFIG_MISSING: {
+      status: 500,
+      message:
+        "Server authentication is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY.",
+      code: "AUTH_CONFIG_MISSING",
+    },
     NARRATIVE_PARSE_FAILED: {
       status: 500,
       message: "Story generation encountered an issue. Please try again.",

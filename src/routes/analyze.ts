@@ -40,10 +40,13 @@ import {
   deleteAnalysis,
 } from "../db/queries";
 import { checkStaleness } from "../utils/stalenessChecker";
+import { getAuthUserId, requireAuth, AuthenticatedRequest } from "../middleware/auth";
 
 const MIN_COMMITS = parseInt(process.env.MIN_COMMITS_REQUIRED || "10");
 
 export const analyzeRouter = Router();
+
+analyzeRouter.use(["/analyze", "/history", "/heatmap"], requireAuth);
 
 async function runFullAnalysis(
   owner: string,
@@ -112,8 +115,9 @@ async function runFullAnalysis(
 
 analyzeRouter.post(
   "/analyze",
-  async (req: Request, res: Response, next: NextFunction) => {
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
+      const userId = getAuthUserId(req);
       const { repoUrl } = req.body as { repoUrl?: string };
       if (!repoUrl || typeof repoUrl !== "string") {
         throw new Error("INVALID_URL");
@@ -121,7 +125,7 @@ analyzeRouter.post(
 
       const { owner, repo } = parseGitHubUrl(repoUrl);
 
-      const stored = await getStoredAnalysis(owner, repo);
+      const stored = await getStoredAnalysis(userId, owner, repo);
       if (stored) {
         console.log(`[Analyze] Returning stored result for ${owner}/${repo}`);
         const staleness = await checkStaleness(
@@ -154,6 +158,7 @@ analyzeRouter.post(
       );
 
       await saveAnalysis(
+        userId,
         owner,
         repo,
         summary.totalCommitsInRepo,
@@ -192,8 +197,9 @@ analyzeRouter.post(
 
 analyzeRouter.post(
   "/analyze/refresh",
-  async (req: Request, res: Response, next: NextFunction) => {
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
+      const userId = getAuthUserId(req);
       const { repoUrl } = req.body as { repoUrl?: string };
       if (!repoUrl || typeof repoUrl !== "string") {
         throw new Error("INVALID_URL");
@@ -202,7 +208,7 @@ analyzeRouter.post(
       const { owner, repo } = parseGitHubUrl(repoUrl);
       console.log(`[Analyze] Forced refresh for ${owner}/${repo}`);
 
-      await deleteAnalysis(owner, repo);
+      await deleteAnalysis(userId, owner, repo);
 
       const { repoMeta, summary, narrative } = await runFullAnalysis(
         owner,
@@ -210,6 +216,7 @@ analyzeRouter.post(
       );
 
       await saveAnalysis(
+        userId,
         owner,
         repo,
         summary.totalCommitsInRepo,
@@ -249,8 +256,9 @@ analyzeRouter.post(
 // without calling the LLM. Useful for presentations.
 analyzeRouter.post(
   "/analyze/preview",
-  async (req: Request, res: Response, next: NextFunction) => {
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
+      getAuthUserId(req);
       const { repoUrl } = req.body as { repoUrl?: string };
       if (!repoUrl || typeof repoUrl !== "string") {
         throw new Error("INVALID_URL");
@@ -354,9 +362,10 @@ analyzeRouter.post(
 
 analyzeRouter.get(
   "/history",
-  async (_req: Request, res: Response, next: NextFunction) => {
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
-      const analyses = await listAllAnalyses();
+      const userId = getAuthUserId(req);
+      const analyses = await listAllAnalyses(userId);
       const history: HistoryItem[] = analyses.map((record) => {
         const meta = record.repoMeta as unknown as RepoMeta;
         return {
@@ -399,11 +408,12 @@ analyzeRouter.get("/health", (_req: Request, res: Response) => {
 
 analyzeRouter.get(
   "/heatmap/:owner/:repo",
-  async (req: Request, res: Response, next: NextFunction) => {
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
+      const userId = getAuthUserId(req);
       const { owner, repo } = req.params as { owner: string; repo: string };
 
-      const stored = await getStoredAnalysis(owner, repo);
+      const stored = await getStoredAnalysis(userId, owner, repo);
       if (!stored) {
         return res.status(404).json({
           success: false,
