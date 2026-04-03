@@ -1,6 +1,7 @@
 // Raw data from GitHub API
 export interface RawCommit {
   sha: string;
+  parents?: Array<{ sha: string }>;
   commit: {
     message: string;
     author: {
@@ -11,6 +12,8 @@ export interface RawCommit {
   };
   author: {
     login: string;
+    avatar_url?: string;
+    html_url?: string;
   } | null;
   stats?: {
     additions: number;
@@ -23,6 +26,51 @@ export interface RawCommit {
     deletions: number;
     status: string;
   }>;
+}
+
+export interface AnalysisFilters {
+  dateRange: {
+    type: "last_n_months" | "last_n_commits" | "all" | "custom";
+    months?: number;
+    commitCount?: number;
+    from?: string;
+    to?: string;
+  };
+  excludeMergeCommits: boolean;
+  branchFilter?: string;
+  pathFilter?: string;
+  minLinesChanged?: number;
+}
+
+export interface CommitDetail {
+  sha: string;
+  message: string;
+  date: string;
+  filesChanged: number;
+  linesAdded: number;
+  linesDeleted: number;
+  impactScore: number;
+  impactLabel: "Critical" | "High" | "Medium" | "Low";
+  aiImpactSummary: string;
+  filesAffected: string[];
+}
+
+export interface ContributorProfile {
+  login: string;
+  avatarUrl: string;
+  totalCommits: number;
+  totalLinesAdded: number;
+  totalLinesDeleted: number;
+  totalFilesChanged: number;
+  overallImpactScore: number;
+  primaryWorkAreas: string[];
+  specializations: string[];
+  peakActivityPeriod: string;
+  firstCommitDate: string;
+  lastCommitDate: string;
+  commitFrequency: string;
+  aiContributorSummary: string;
+  commits: CommitDetail[];
 }
 
 export interface RawContributor {
