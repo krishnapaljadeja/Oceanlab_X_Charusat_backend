@@ -3,12 +3,13 @@ import { prisma } from "./client";
 import { RepoMeta, AnalysisSummary, GeneratedNarrative } from "../types";
 
 export async function getStoredAnalysis(
+  userId: string,
   owner: string,
   repo: string,
 ): Promise<Analysis | null> {
   try {
     return await prisma.analysis.findUnique({
-      where: { owner_repo: { owner, repo } },
+      where: { userId_owner_repo: { userId, owner, repo } },
     });
   } catch (error) {
     console.error("[DB] getStoredAnalysis failed:", error);
@@ -17,6 +18,7 @@ export async function getStoredAnalysis(
 }
 
 export async function saveAnalysis(
+  userId: string,
   owner: string,
   repo: string,
   commitCount: number,
@@ -26,8 +28,9 @@ export async function saveAnalysis(
 ): Promise<void> {
   try {
     await prisma.analysis.upsert({
-      where: { owner_repo: { owner, repo } },
+      where: { userId_owner_repo: { userId, owner, repo } },
       create: {
+        userId,
         owner,
         repo,
         fullName: `${owner}/${repo}`,
@@ -49,9 +52,10 @@ export async function saveAnalysis(
   }
 }
 
-export async function listAllAnalyses(): Promise<Analysis[]> {
+export async function listAllAnalyses(userId: string): Promise<Analysis[]> {
   try {
     return await prisma.analysis.findMany({
+      where: { userId },
       orderBy: { analyzedAt: "desc" },
     });
   } catch (error) {
@@ -61,12 +65,13 @@ export async function listAllAnalyses(): Promise<Analysis[]> {
 }
 
 export async function deleteAnalysis(
+  userId: string,
   owner: string,
   repo: string,
 ): Promise<void> {
   try {
     await prisma.analysis.deleteMany({
-      where: { owner, repo },
+      where: { userId, owner, repo },
     });
   } catch (error) {
     console.error("[DB] deleteAnalysis failed:", error);
@@ -75,12 +80,13 @@ export async function deleteAnalysis(
 }
 
 export async function getStoredCommitCount(
+  userId: string,
   owner: string,
   repo: string,
 ): Promise<number | null> {
   try {
     const result = await prisma.analysis.findUnique({
-      where: { owner_repo: { owner, repo } },
+      where: { userId_owner_repo: { userId, owner, repo } },
       select: { commitCount: true },
     });
     return result?.commitCount ?? null;

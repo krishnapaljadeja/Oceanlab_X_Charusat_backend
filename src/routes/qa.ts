@@ -2,6 +2,11 @@ import { Router, Request, Response, NextFunction } from "express";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getStoredAnalysis } from "../db/queries";
 import {
+  AuthenticatedRequest,
+  getAuthUserId,
+  requireAuth,
+} from "../middleware/auth";
+import {
   RepoMeta,
   AnalysisSummary,
   GeneratedNarrative,
@@ -57,10 +62,13 @@ async function callLLM(prompt: string): Promise<string> {
 
 export const qaRouter = Router();
 
+qaRouter.use(requireAuth);
+
 qaRouter.post(
   "/qa",
-  async (req: Request, res: Response, next: NextFunction) => {
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
+      const userId = getAuthUserId(req);
       const body = req.body as Partial<QARequest>;
       const { owner, repo, question, history } = body;
 
@@ -104,7 +112,7 @@ qaRouter.post(
         });
       }
 
-      const stored = await getStoredAnalysis(owner, repo);
+      const stored = await getStoredAnalysis(userId, owner, repo);
       if (!stored) {
         return res.status(404).json({
           success: false,
