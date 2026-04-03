@@ -1,0 +1,23 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Analysis {
+  id          Int      @id @default(autoincrement())
+  owner       String
+  repo        String
+  fullName    String   @map("full_name")
+  analyzedAt  DateTime @default(now()) @map("analyzed_at")
+  commitCount Int      @map("commit_count")
+  repoMeta    Json     @map("repo_meta")
+  summary     Json
+  narrative   Json
+
+  @@unique([owner, repo])
+  @@map("analyses")
+}
