@@ -33,6 +33,15 @@ app.use((req, _res, next) => {
   next();
 });
 
+app.get(["/health", "/healthz", "/api/healthcheck"], (_req, res) => {
+  res.json({
+    success: true,
+    status: "ok",
+    service: "backend",
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.use("/api", analyzeRouter);
 app.use("/api", qaRouter);
 app.use("/api", ingestRouter);

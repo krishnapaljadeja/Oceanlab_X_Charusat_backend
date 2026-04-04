@@ -5,7 +5,6 @@ import {
   AuthenticatedRequest,
   requireAuth,
   signAuthToken,
-  signEmailVerificationToken,
   verifyEmailVerificationToken,
 } from "../middleware/auth";
 import {
@@ -14,7 +13,6 @@ import {
   findAuthUserById,
   markAuthUserEmailVerified,
 } from "../db/authQueries";
-import { sendSignupEmail } from "../services/mailer";
 
 export const authRouter = Router();
 
@@ -59,31 +57,19 @@ authRouter.post(
       const id = randomUUID();
       const passwordHash = await bcrypt.hash(password, 10);
       await createAuthUser(id, normalizedEmail, passwordHash);
+      await markAuthUserEmailVerified(id);
 
-      const verificationToken = signEmailVerificationToken({
-        sub: id,
-        email: normalizedEmail,
-      });
-      const frontendUrl = getFrontendUrl();
-      const backendUrl = getBackendUrl(req);
-      const redirectTarget = `${frontendUrl}/login`;
-      const confirmationLink =
-        `${backendUrl}/api/auth/verify-email?token=${encodeURIComponent(verificationToken)}` +
-        `&redirect=${encodeURIComponent(redirectTarget)}`;
-      const redirectLink =
-        `${redirectTarget}?email_verified=true` +
-        `&access_token=<generated-after-verification>`;
-
-      sendSignupEmail(normalizedEmail, {
-        confirmationLink,
-        redirectLink,
-      }).catch((err) => {
-        console.error("[Mail] Failed to send signup email:", err);
-      });
+      const token = signAuthToken({ sub: id, email: normalizedEmail });
 
       return res.json({
         success: true,
-        needsConfirmation: true,
+        session: {
+          accessToken: token,
+          user: {
+            id,
+            email: normalizedEmail,
+          },
+        },
       });
     } catch (err) {
       next(err);
@@ -114,9 +100,6 @@ authRouter.post(
       if (!isMatch) {
         throw new Error("AUTH_INVALID_CREDENTIALS");
       }
-      if (!user.emailVerified) {
-        throw new Error("AUTH_EMAIL_NOT_VERIFIED");
-      }
 
       const token = signAuthToken({ sub: user.id, email: user.email });
 
@@ -140,8 +123,7 @@ authRouter.get(
   "/auth/verify-email",
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
-      const token =
-        typeof req.query.token === "string" ? req.query.token : "";
+      const token = typeof req.query.token === "string" ? req.query.token : "";
       const redirect =
         typeof req.query.redirect === "string"
           ? req.query.redirect
