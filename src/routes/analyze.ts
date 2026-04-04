@@ -9,6 +9,7 @@ import {
   fetchAllCommitMetadata,
   selectSignificantCommits,
   fetchCommitDetails,
+  fetchContributorCommitMetadata,
 } from "../services/commitFetcher";
 import {
   processCommits,
@@ -20,7 +21,8 @@ import { detectPhases } from "../services/phaseDetector";
 import { detectMilestones } from "../services/milestoneDetector";
 import { generateNarrative } from "../services/llm";
 import { buildPrompt } from "../services/llm/prompt";
-import { getRateLimitStatus } from "../services/githubClient";
+import { getRateLimitStatus, githubAxios } from "../services/githubClient";
+import { buildContributorProfile } from "../services/contributorAnalyzer";
 import {
   AnalysisSummary,
   AnalysisResponse,
@@ -32,6 +34,8 @@ import {
   HeatmapWeek,
   HeatmapStats,
   HeatmapResponse,
+  AnalysisFilters,
+  RawCommit,
 } from "../types";
 import {
   getStoredAnalysis,
@@ -47,6 +51,74 @@ const MIN_COMMITS = parseInt(process.env.MIN_COMMITS_REQUIRED || "10");
 export const analyzeRouter = Router();
 
 analyzeRouter.use(["/analyze", "/history", "/heatmap"], requireAuth);
+analyzeRouter.use(["/contributors/profile"], requireAuth);
+
+function parseAnalysisFilters(input: unknown): AnalysisFilters | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const raw = input as Partial<AnalysisFilters>;
+
+  const dateRangeRaw = raw.dateRange || { type: "all" as const };
+  const dateRangeType = dateRangeRaw.type;
+  if (
+    dateRangeType !== "all" &&
+    dateRangeType !== "last_n_months" &&
+    dateRangeType !== "last_n_commits" &&
+    dateRangeType !== "custom"
+  ) {
+    return undefined;
+  }
+
+  return {
+    dateRange: {
+      type: dateRangeType,
+      months:
+        typeof dateRangeRaw.months === "number"
+          ? dateRangeRaw.months
+          : undefined,
+      commitCount:
+        typeof dateRangeRaw.commitCount === "number"
+          ? dateRangeRaw.commitCount
+          : undefined,
+      from:
+        typeof dateRangeRaw.from === "string" ? dateRangeRaw.from : undefined,
+      to: typeof dateRangeRaw.to === "string" ? dateRangeRaw.to : undefined,
+    },
+    excludeMergeCommits: Boolean(raw.excludeMergeCommits),
+    branchFilter:
+      typeof raw.branchFilter === "string" ? raw.branchFilter : undefined,
+    pathFilter: typeof raw.pathFilter === "string" ? raw.pathFilter : undefined,
+    minLinesChanged:
+      typeof raw.minLinesChanged === "number" ? raw.minLinesChanged : undefined,
+  };
+}
+
+async function fetchCommitDetailsInBatches(
+  owner: string,
+  repo: string,
+  commits: RawCommit[],
+  batchSize: number = 10,
+): Promise<RawCommit[]> {
+  const detailed: RawCommit[] = [];
+
+  for (let i = 0; i < commits.length; i += batchSize) {
+    const batch = commits.slice(i, i + batchSize);
+    const fetched = await Promise.all(
+      batch.map(async (commit) => {
+        try {
+          const { data } = await githubAxios.get(
+            `/repos/${owner}/${repo}/commits/${commit.sha}`,
+          );
+          return data as RawCommit;
+        } catch {
+          return commit;
+        }
+      }),
+    );
+    detailed.push(...fetched);
+  }
+
+  return detailed;
+}
 
 async function runFullAnalysis(
   owner: string,
@@ -112,6 +184,69 @@ async function runFullAnalysis(
   const narrative = await generateNarrative(summary);
   return { repoMeta, summary, narrative };
 }
+
+analyzeRouter.post(
+  "/contributors/profile",
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      getAuthUserId(req);
+      const { repoUrl, login, filters } = req.body as {
+        repoUrl?: string;
+        login?: string;
+        filters?: AnalysisFilters;
+      };
+
+      if (!repoUrl || typeof repoUrl !== "string") {
+        throw new Error("INVALID_URL");
+      }
+      if (!login || typeof login !== "string") {
+        return res.status(400).json({
+          success: false,
+          error: "Contributor login is required.",
+          code: "INVALID_REQUEST",
+        });
+      }
+
+      const { owner, repo } = parseGitHubUrl(repoUrl);
+      const activeFilters = parseAnalysisFilters(filters);
+
+      const { commits } = await fetchContributorCommitMetadata(
+        owner,
+        repo,
+        login,
+        activeFilters,
+      );
+
+      if (commits.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "No commits found for this contributor in the selected range.",
+          code: "NOT_FOUND",
+        });
+      }
+
+      const detailedCommits = await fetchCommitDetailsInBatches(
+        owner,
+        repo,
+        commits,
+      );
+      const firstWithAvatar = commits.find(
+        (commit) => commit.author?.avatar_url,
+      );
+      const avatarUrl = firstWithAvatar?.author?.avatar_url || "";
+
+      const profile = await buildContributorProfile(
+        login,
+        detailedCommits,
+        avatarUrl,
+      );
+
+      return res.json({ success: true, profile });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 analyzeRouter.post(
   "/analyze",
