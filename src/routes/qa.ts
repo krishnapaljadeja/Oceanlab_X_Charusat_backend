@@ -1,5 +1,4 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getStoredAnalysis } from "../db/queries";
 import {
   AuthenticatedRequest,
@@ -13,69 +12,8 @@ import {
   QARequest,
   QAResponse,
 } from "../types";
-
-interface OllamaApiResponse {
-  message: {
-    content: string;
-  };
-}
-
-function getGeminiMaxOutputTokens(): number {
-  const raw = process.env.GEMINI_MAX_OUTPUT_TOKENS;
-  const parsed = Number.parseInt(raw || "", 10);
-
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return 1024;
-  }
-
-  return parsed;
-}
-
-async function callLLM(prompt: string): Promise<string> {
-  const provider = process.env.LLM_PROVIDER || "gemini";
-
-  if (provider === "gemini") {
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-    // const model = genAI.getGenerativeModel({
-    //   model: "gemini-2.5-flash",
-    //   generationConfig: {
-    //     maxOutputTokens: getGeminiMaxOutputTokens(),
-    //   },
-    // });
-    const result = await model.generateContent(prompt);
-    return result.response.text();
-  }
-
-  if (provider === "ollama") {
-    const baseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-    const ollamaModel = process.env.OLLAMA_MODEL || "llama3.1";
-
-    const response = await fetch(`${baseUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: ollamaModel,
-        stream: false,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error("QA_GENERATION_FAILED");
-    }
-
-    const data = (await response.json()) as OllamaApiResponse;
-
-    if (!data?.message?.content) {
-      throw new Error("QA_GENERATION_FAILED");
-    }
-
-    return data.message.content;
-  }
-
-  throw new Error("QA_GENERATION_FAILED");
-}
+import { retrieveChunks } from "../services/ragService";
+import { generateText } from "../services/llm";
 
 export const qaRouter = Router();
 
@@ -143,7 +81,8 @@ qaRouter.post(
       const summary = stored.summary as unknown as AnalysisSummary;
       const narrative = stored.narrative as unknown as GeneratedNarrative;
 
-      const contextData = {
+      const retrieved = await retrieveChunks(userId, owner, repo, question, 12);
+      const fallbackContextData = {
         repoName: repoMeta.fullName,
         description: repoMeta.description,
         language: repoMeta.language,
@@ -173,6 +112,13 @@ qaRouter.post(
         },
       };
 
+      const contextBlock =
+        retrieved.length > 0
+          ? `RELEVANT CONTEXT (retrieved from commit history):\n${retrieved
+              .map((chunk) => `[${chunk.chunkType}] ${chunk.chunkText}`)
+              .join("\n")}\n\nREPOSITORY OVERVIEW:\n${repoMeta.fullName}, ${repoMeta.language || "unknown language"}, ${summary.totalCommitsInRepo} commits,\n${summary.dateRange.first} to ${summary.dateRange.last}`
+          : `REPOSITORY ANALYSIS DATA:\n${JSON.stringify(fallbackContextData, null, 2)}`;
+
       const recentHistory = history.slice(-5);
       const conversationHistory = recentHistory
         .map((msg) =>
@@ -184,8 +130,7 @@ qaRouter.post(
 
       const prompt = `You are an expert analyst for the GitHub repository "${repoMeta.fullName}". You have access to a complete analysis of this repository's commit history.
 
-REPOSITORY ANALYSIS DATA:
-${JSON.stringify(contextData, null, 2)}
+${contextBlock}
 
 CRITICAL RULES:
 1. Answer ONLY based on the data provided above
@@ -203,9 +148,36 @@ Answer:`;
 
       let llmResponse: string;
       try {
-        llmResponse = await callLLM(prompt);
+        llmResponse = await generateText(prompt);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
+        if (
+          msg.includes("GEMINI_QUOTA_EXCEEDED") ||
+          msg.includes("429") ||
+          msg.toLowerCase().includes("quota")
+        ) {
+          return res.status(429).json({
+            success: false,
+            error:
+              "AI answer quota is currently exceeded. Please retry in a minute.",
+            code: "QA_QUOTA_EXCEEDED",
+          });
+        }
+
+        if (
+          msg.includes("GEMINI_UNAVAILABLE") ||
+          msg.includes("OLLAMA_HTTP_") ||
+          msg.toLowerCase().includes("fetch failed") ||
+          msg.toLowerCase().includes("empty_response")
+        ) {
+          return res.status(503).json({
+            success: false,
+            error:
+              "AI answer service is temporarily unavailable. Please try again shortly.",
+            code: "QA_GENERATION_UNAVAILABLE",
+          });
+        }
+
         if (msg === "QA_GENERATION_FAILED") {
           return res.status(500).json({
             success: false,

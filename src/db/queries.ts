@@ -1,6 +1,7 @@
 import { Analysis, Prisma } from "@prisma/client";
 import { prisma } from "./client";
 import { RepoMeta, AnalysisSummary, GeneratedNarrative } from "../types";
+import { indexAnalysis } from "../services/ragService";
 
 export async function getStoredAnalysis(
   userId: string,
@@ -47,6 +48,10 @@ export async function saveAnalysis(
         narrative: narrative as unknown as Prisma.InputJsonValue,
       },
     });
+
+    indexAnalysis(userId, owner, repo, summary).catch((err) =>
+      console.error("[RAG] indexing failed:", err),
+    );
   } catch (error) {
     console.error("[DB] saveAnalysis failed:", error);
   }

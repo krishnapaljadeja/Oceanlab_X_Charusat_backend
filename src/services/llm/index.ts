@@ -370,6 +370,44 @@ export function getLLMProviderStatus(): ProviderStatus {
   };
 }
 
+function buildFallbackNarrative(summary: AnalysisSummary): GeneratedNarrative {
+  const chapters = summary.phases.slice(0, 6).map((phase) => ({
+    title: phase.label,
+    period: `${phase.startDate.substring(0, 10)} to ${phase.endDate.substring(0, 10)}`,
+    story: `${phase.label} activity included ${phase.commitCount} commits with ${phase.velocity} velocity and mostly ${phase.dominantType} work.`,
+    keyEvents: [
+      `Dominant type: ${phase.dominantType}`,
+      `Key files: ${phase.keyFiles.slice(0, 3).join(", ") || "not available"}`,
+      `Contributors: ${phase.contributors.slice(0, 3).join(", ") || "not available"}`,
+    ],
+  }));
+
+  return {
+    projectOverview: `${summary.repoMeta.fullName} is a ${summary.repoMeta.language || "mixed-language"} project with ${summary.totalCommitsInRepo} analyzed commits.`,
+    narrativeChapters: chapters,
+    milestoneHighlights: summary.milestones.slice(0, 6).map((m) => ({
+      date: m.date,
+      title: m.title,
+      significance: m.significance,
+    })),
+    contributorInsights:
+      summary.topContributors.length > 0
+        ? `Top contributors include ${summary.topContributors
+            .slice(0, 3)
+            .map((c) => `${c.name} (${c.commitCount} commits)`)
+            .join(", ")}.`
+        : "Contributor insights are limited in fallback mode.",
+    architecturalObservations:
+      "Automated fallback narrative generated from structured commit metadata due to temporary LLM unavailability.",
+    currentState:
+      summary.phases.length > 0
+        ? `Most recent phase is ${summary.phases[summary.phases.length - 1].label}.`
+        : "Current state is derived from limited summary data.",
+    dataConfidenceNote:
+      "Narrative generated in fallback mode because all configured LLM providers were unavailable for this request.",
+  };
+}
+
 export async function generateNarrative(
   summary: AnalysisSummary,
 ): Promise<GeneratedNarrative> {
@@ -380,9 +418,18 @@ export async function generateNarrative(
     );
   }
 
-  const narrative = await executeWithFallback((provider) =>
-    generateNarrativeWithProvider(provider, summary),
-  );
+  let narrative: GeneratedNarrative;
+  try {
+    narrative = await executeWithFallback((provider) =>
+      generateNarrativeWithProvider(provider, summary),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[${nowIso()}] [LLM] Both providers unavailable; using fallback narrative. reason=${message}`,
+    );
+    narrative = buildFallbackNarrative(summary);
+  }
 
   return normalizeNarrativeChapters(summary, narrative);
 }

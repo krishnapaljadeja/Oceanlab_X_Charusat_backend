@@ -309,3 +309,18 @@ export interface HeatmapResponse {
   owner: string;
   repo: string;
 }
+
+export interface OnboardingGuideRequest {
+  repoUrl: string;
+  options?: {
+    roleHint?: string;
+  };
+}
+
+export interface OnboardingGuideResponse {
+  success: true;
+  guide: string;
+  repoFullName: string;
+  generatedAt: string;
+  fromStoredAnalysis: true;
+}
