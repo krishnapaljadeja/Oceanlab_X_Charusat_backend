@@ -8,6 +8,73 @@ export interface GitingestResult {
   content: string;
 }
 
+type GitingestRunnerPayload = {
+  success: boolean;
+  summary?: string;
+  tree?: string;
+  content?: string;
+  error?: string;
+};
+
+function redactSensitive(input: string): string {
+  return input
+    .replace(/ghp_[A-Za-z0-9_]+/g, "ghp_[REDACTED]")
+    .replace(
+      /Authorization:\s*Basic\s+[A-Za-z0-9+/=]+/gi,
+      "Authorization: Basic [REDACTED]",
+    );
+}
+
+function summarizeOutputForError(output: string): string {
+  const redacted = redactSensitive(output || "").trim();
+  if (!redacted) return "(empty output)";
+
+  const lines = redacted
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0);
+  const tail = lines.slice(-6).join("\n");
+  return tail.length > 3000 ? `${tail.slice(-3000)}\n[TRUNCATED]` : tail;
+}
+
+function parseRunnerOutput(stdout: string): GitingestRunnerPayload {
+  const trimmed = stdout.trim();
+
+  if (!trimmed) {
+    throw new Error("Failed to parse gitingest output: empty stdout");
+  }
+
+  try {
+    return JSON.parse(trimmed) as GitingestRunnerPayload;
+  } catch {
+    // Some hosted environments emit JSON logs line-by-line before the final payload.
+    // Parse each line from bottom-up and pick the first object with a `success` field.
+    const lines = trimmed
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const line = lines[i];
+      if (!line.startsWith("{") || !line.endsWith("}")) {
+        continue;
+      }
+
+      try {
+        const parsed = JSON.parse(line) as GitingestRunnerPayload;
+        if (typeof parsed.success === "boolean") {
+          return parsed;
+        }
+      } catch {
+        // continue scanning
+      }
+    }
+
+    throw new Error(
+      `Failed to parse gitingest output: ${summarizeOutputForError(trimmed)}`,
+    );
+  }
+}
+
 export async function fetchRepoDigest(
   repoUrl: string,
   options?: {
@@ -175,13 +242,7 @@ export async function fetchRepoDigest(
         }
 
         try {
-          const result = JSON.parse(stdout.trim()) as {
-            success: boolean;
-            summary?: string;
-            tree?: string;
-            content?: string;
-            error?: string;
-          };
+          const result = parseRunnerOutput(stdout);
 
           if (!result.success) {
             reject(new Error(result.error || "Unknown gitingest failure"));
@@ -194,7 +255,11 @@ export async function fetchRepoDigest(
             content: result.content || "",
           });
         } catch {
-          reject(new Error(`Failed to parse gitingest output: ${stdout}`));
+          reject(
+            new Error(
+              `Failed to parse gitingest output: ${summarizeOutputForError(stdout)}`,
+            ),
+          );
         }
       });
 

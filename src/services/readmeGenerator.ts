@@ -5,19 +5,44 @@ export interface GeneratedReadmeDoc {
   readme: string;
 }
 
+function getReadmePromptCharBudget(): number {
+  const parsed = Number.parseInt(
+    process.env.INGEST_PROMPT_MAX_CHARS || "160000 ",
+    10,
+  );
+  if (!Number.isFinite(parsed) || parsed < 50000) {
+    return 160000 ;
+  }
+  return parsed;
+}
+
+function trimForPrompt(input: string, maxChars: number): string {
+  if (input.length <= maxChars) return input;
+  const kept = input.slice(0, maxChars);
+  const omitted = input.length - kept.length;
+  return `${kept}\n\n[TRUNCATED: omitted ${omitted} characters to fit model context budget]`;
+}
+
 export async function generateReadmeFromDigest(
   repoUrl: string,
   digest: { tree: string; content: string },
 ): Promise<string> {
+  const promptBudget = getReadmePromptCharBudget();
+  const treeBudget = Math.floor(promptBudget * 0.2);
+  const contentBudget = promptBudget - treeBudget;
+
+  const boundedTree = trimForPrompt(digest.tree || "", treeBudget);
+  const boundedContent = trimForPrompt(digest.content || "", contentBudget);
+
   const prompt = `You are a senior technical writer. Generate a complete, polished, visually attractive README.md for this repository.
 
 Repository URL:
 ${repoUrl}
 
 Repository digest (directory tree + key config files):
-${digest.tree}
+${boundedTree}
 
-${digest.content}
+${boundedContent}
 
 Generate a README.md with these exact sections:
 1. Project title and one-line description

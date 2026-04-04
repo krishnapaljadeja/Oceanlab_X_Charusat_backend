@@ -112,7 +112,22 @@ Server starts at `http://localhost:4000` by default.
 
 - `npm run dev` start with nodemon + ts-node
 - `npm run build` compile TypeScript to `dist/`
+- `npm run python-deps` install Python dependencies from `requirements.txt`
+- `npm run build:render` install Python deps then compile TypeScript (recommended Render build command)
 - `npm run start` run compiled build
+
+## Render Deployment
+
+Use these backend service settings so the Python bridge dependency is available at runtime:
+
+- Build Command: `npm run build:render`
+- Start Command: `npm run start`
+
+If your Render image does not expose `python3` by default, set:
+
+- `GITINGEST_PYTHON_BIN=python`
+
+or point it to a specific interpreter path in environment variables.
 
 ## API Routes
 
