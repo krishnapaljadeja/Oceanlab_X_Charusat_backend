@@ -17,10 +17,9 @@ import { generateText } from "../services/llm";
 
 export const qaRouter = Router();
 
-qaRouter.use(requireAuth);
-
 qaRouter.post(
   "/qa",
+  requireAuth,
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const userId = getAuthUserId(req);

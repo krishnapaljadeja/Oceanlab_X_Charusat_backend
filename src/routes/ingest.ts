@@ -9,8 +9,6 @@ import { generateReadmeFromDigest } from "../services/readmeGenerator";
 
 export const ingestRouter = Router();
 
-ingestRouter.use(requireAuth);
-
 interface IngestOptions {
   includePatterns?: string[];
   excludePatterns?: string[];
@@ -34,6 +32,7 @@ function parseOptions(input: unknown): IngestOptions | undefined {
 
 ingestRouter.post(
   "/ingest/fetch",
+  requireAuth,
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       getAuthUserId(req);
@@ -56,6 +55,7 @@ ingestRouter.post(
 
 ingestRouter.post(
   "/ingest/readme",
+  requireAuth,
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       getAuthUserId(req);

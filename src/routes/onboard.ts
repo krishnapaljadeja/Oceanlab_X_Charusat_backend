@@ -20,10 +20,9 @@ import {
 
 export const onboardRouter = Router();
 
-onboardRouter.use(requireAuth);
-
 onboardRouter.post(
   "/onboard",
+  requireAuth,
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const userId = getAuthUserId(req);
