@@ -8,6 +8,38 @@ export interface GitingestResult {
   content: string;
 }
 
+type GitingestRunnerPayload = {
+  success: boolean;
+  summary?: string;
+  tree?: string;
+  content?: string;
+  error?: string;
+};
+
+function parseRunnerOutput(stdout: string): GitingestRunnerPayload {
+  const trimmed = stdout.trim();
+
+  try {
+    return JSON.parse(trimmed) as GitingestRunnerPayload;
+  } catch {
+    // Some hosted environments can prepend/append extra logs.
+    // Try to recover by extracting the broadest JSON object span.
+    const firstBrace = trimmed.indexOf("{");
+    const lastBrace = trimmed.lastIndexOf("}");
+
+    if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
+      throw new Error(`Failed to parse gitingest output: ${trimmed}`);
+    }
+
+    const candidate = trimmed.slice(firstBrace, lastBrace + 1);
+    try {
+      return JSON.parse(candidate) as GitingestRunnerPayload;
+    } catch {
+      throw new Error(`Failed to parse gitingest output: ${trimmed}`);
+    }
+  }
+}
+
 export async function fetchRepoDigest(
   repoUrl: string,
   options?: {
@@ -175,13 +207,7 @@ export async function fetchRepoDigest(
         }
 
         try {
-          const result = JSON.parse(stdout.trim()) as {
-            success: boolean;
-            summary?: string;
-            tree?: string;
-            content?: string;
-            error?: string;
-          };
+          const result = parseRunnerOutput(stdout);
 
           if (!result.success) {
             reject(new Error(result.error || "Unknown gitingest failure"));

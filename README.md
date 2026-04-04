@@ -120,7 +120,7 @@ Server starts at `http://localhost:4000` by default.
 
 Use these backend service settings so the Python bridge dependency is available at runtime:
 
-- Build Command: `npm install && npm run build:render`
+- Build Command: `npm run build:render`
 - Start Command: `npm run start`
 
 If your Render image does not expose `python3` by default, set:
