@@ -7,11 +7,11 @@ export interface GeneratedReadmeDoc {
 
 function getReadmePromptCharBudget(): number {
   const parsed = Number.parseInt(
-    process.env.INGEST_PROMPT_MAX_CHARS || "220000",
+    process.env.INGEST_PROMPT_MAX_CHARS || "160000 ",
     10,
   );
   if (!Number.isFinite(parsed) || parsed < 50000) {
-    return 220000;
+    return 160000 ;
   }
   return parsed;
 }
