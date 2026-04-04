@@ -7,6 +7,24 @@ export function errorHandler(
   res: Response,
   _next: NextFunction,
 ): void {
+  const payloadTooLarge =
+    err.name === "PayloadTooLargeError" ||
+    (err as Error & { type?: string }).type === "entity.too.large";
+
+  if (payloadTooLarge) {
+    console.error(
+      `[Error] type=${err?.constructor?.name} message=${err.message}`,
+    );
+    console.error(err.stack);
+    res.status(413).json({
+      success: false,
+      error:
+        "Request payload is too large. Reduce ingest size or increase REQUEST_BODY_LIMIT on server.",
+      code: "PAYLOAD_TOO_LARGE",
+    });
+    return;
+  }
+
   const errorMap: Record<
     string,
     { status: number; message: string; code: string }

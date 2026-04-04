@@ -19,10 +19,11 @@ process.on("unhandledRejection", (reason) => {
 
 const app = express();
 const PORT = parseInt(process.env.PORT || "4000");
+const REQUEST_BODY_LIMIT = process.env.REQUEST_BODY_LIMIT || "8mb";
 
 app.use(cors({ origin: process.env.FRONTEND_URL || "http://localhost:5173" }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: REQUEST_BODY_LIMIT }));
+app.use(express.urlencoded({ extended: true, limit: REQUEST_BODY_LIMIT }));
 
 // Request logger
 app.use((req, _res, next) => {
@@ -45,6 +46,7 @@ app.use(errorHandler);
 
 app.listen(PORT, async () => {
   console.log(`[Server] Running on http://localhost:${PORT}`);
+  console.log(`[Server] Request body limit: ${REQUEST_BODY_LIMIT}`);
   console.log(
     `[Server] GitHub token: ${process.env.GITHUB_TOKEN ? "✓ loaded" : "✗ missing"}`,
   );
