@@ -1,24 +1,67 @@
 import { Request, Response, NextFunction } from "express";
+import jwt from "jsonwebtoken";
 import { createClient } from "@supabase/supabase-js";
 
+const AUTH_JWT_SECRET = process.env.AUTH_JWT_SECRET ?? "";
 const supabaseUrl = process.env.SUPABASE_URL ?? "";
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? "";
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
-const supabaseKey = supabaseServiceRoleKey || supabaseAnonKey;
 
-const hasSupabaseConfig = Boolean(supabaseUrl && supabaseKey);
+export const supabase =
+  supabaseUrl && supabaseServiceRoleKey
+    ? createClient(supabaseUrl, supabaseServiceRoleKey, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+        },
+      })
+    : null;
 
-export const supabase = hasSupabaseConfig
-  ? createClient(supabaseUrl, supabaseKey, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    })
-  : null;
+export interface AuthTokenPayload {
+  sub: string;
+  email: string;
+}
+
+interface EmailVerificationTokenPayload extends AuthTokenPayload {
+  purpose: "email_verification";
+}
+
+export function signAuthToken(payload: AuthTokenPayload): string {
+  if (!AUTH_JWT_SECRET) {
+    throw new Error("AUTH_CONFIG_MISSING");
+  }
+
+  const expiresIn =
+    (process.env.AUTH_JWT_EXPIRES_IN as jwt.SignOptions["expiresIn"]) || "7d";
+
+  return jwt.sign(payload, AUTH_JWT_SECRET, {
+    expiresIn,
+  });
+}
+
+function verifyAuthToken(token: string): AuthTokenPayload {
+  if (!AUTH_JWT_SECRET) {
+    throw new Error("AUTH_CONFIG_MISSING");
+  }
+
+  const decoded = jwt.verify(token, AUTH_JWT_SECRET);
+  if (!decoded || typeof decoded !== "object") {
+    throw new Error("AUTH_INVALID");
+  }
+
+  const payload = decoded as Partial<AuthTokenPayload>;
+  if (!payload.sub || !payload.email) {
+    throw new Error("AUTH_INVALID");
+  }
+
+  return {
+    sub: payload.sub,
+    email: payload.email,
+  };
+}
 
 export interface AuthenticatedRequest extends Request {
   authUserId?: string;
+  authEmail?: string;
 }
 
 export async function requireAuth(
@@ -27,10 +70,6 @@ export async function requireAuth(
   next: NextFunction,
 ) {
   try {
-    if (!supabase) {
-      throw new Error("AUTH_CONFIG_MISSING");
-    }
-
     const header = req.header("authorization");
     if (!header || !header.toLowerCase().startsWith("bearer ")) {
       throw new Error("AUTH_REQUIRED");
@@ -41,12 +80,10 @@ export async function requireAuth(
       throw new Error("AUTH_REQUIRED");
     }
 
-    const { data, error } = await supabase.auth.getUser(token);
-    if (error || !data.user) {
-      throw new Error("AUTH_INVALID");
-    }
+    const payload = verifyAuthToken(token);
 
-    req.authUserId = data.user.id;
+    req.authUserId = payload.sub;
+    req.authEmail = payload.email;
     next();
   } catch (error) {
     next(error);
@@ -58,4 +95,49 @@ export function getAuthUserId(req: AuthenticatedRequest): string {
     throw new Error("AUTH_REQUIRED");
   }
   return req.authUserId;
+}
+
+export function signEmailVerificationToken(payload: AuthTokenPayload): string {
+  if (!AUTH_JWT_SECRET) {
+    throw new Error("AUTH_CONFIG_MISSING");
+  }
+
+  const tokenPayload: EmailVerificationTokenPayload = {
+    ...payload,
+    purpose: "email_verification",
+  };
+  const expiresIn =
+    (process.env.AUTH_VERIFY_EXPIRES_IN as jwt.SignOptions["expiresIn"]) ||
+    "24h";
+
+  return jwt.sign(tokenPayload, AUTH_JWT_SECRET, {
+    expiresIn,
+  });
+}
+
+export function verifyEmailVerificationToken(
+  token: string,
+): AuthTokenPayload {
+  if (!AUTH_JWT_SECRET) {
+    throw new Error("AUTH_CONFIG_MISSING");
+  }
+
+  const decoded = jwt.verify(token, AUTH_JWT_SECRET);
+  if (!decoded || typeof decoded !== "object") {
+    throw new Error("AUTH_VERIFY_INVALID");
+  }
+
+  const payload = decoded as Partial<EmailVerificationTokenPayload>;
+  if (
+    !payload.sub ||
+    !payload.email ||
+    payload.purpose !== "email_verification"
+  ) {
+    throw new Error("AUTH_VERIFY_INVALID");
+  }
+
+  return {
+    sub: payload.sub,
+    email: payload.email,
+  };
 }

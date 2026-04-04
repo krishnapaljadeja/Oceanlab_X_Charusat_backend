@@ -71,8 +71,38 @@ export function errorHandler(
     AUTH_CONFIG_MISSING: {
       status: 500,
       message:
-        "Server authentication is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY.",
+        "Server authentication is not configured. Set AUTH_JWT_SECRET.",
       code: "AUTH_CONFIG_MISSING",
+    },
+    AUTH_INVALID_INPUT: {
+      status: 400,
+      message: "Please provide a valid email and password.",
+      code: "AUTH_INVALID_INPUT",
+    },
+    AUTH_WEAK_PASSWORD: {
+      status: 400,
+      message: "Password must be at least 6 characters long.",
+      code: "AUTH_WEAK_PASSWORD",
+    },
+    AUTH_EMAIL_IN_USE: {
+      status: 409,
+      message: "This email is already registered. Please login instead.",
+      code: "AUTH_EMAIL_IN_USE",
+    },
+    AUTH_INVALID_CREDENTIALS: {
+      status: 401,
+      message: "Invalid email or password.",
+      code: "AUTH_INVALID_CREDENTIALS",
+    },
+    AUTH_EMAIL_NOT_VERIFIED: {
+      status: 403,
+      message: "Please verify your email before signing in.",
+      code: "AUTH_EMAIL_NOT_VERIFIED",
+    },
+    AUTH_VERIFY_INVALID: {
+      status: 400,
+      message: "Verification link is invalid or expired.",
+      code: "AUTH_VERIFY_INVALID",
     },
     NARRATIVE_PARSE_FAILED: {
       status: 500,
