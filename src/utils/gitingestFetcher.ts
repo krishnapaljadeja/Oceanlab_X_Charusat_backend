@@ -16,27 +16,62 @@ type GitingestRunnerPayload = {
   error?: string;
 };
 
+function redactSensitive(input: string): string {
+  return input
+    .replace(/ghp_[A-Za-z0-9_]+/g, "ghp_[REDACTED]")
+    .replace(
+      /Authorization:\s*Basic\s+[A-Za-z0-9+/=]+/gi,
+      "Authorization: Basic [REDACTED]",
+    );
+}
+
+function summarizeOutputForError(output: string): string {
+  const redacted = redactSensitive(output || "").trim();
+  if (!redacted) return "(empty output)";
+
+  const lines = redacted
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0);
+  const tail = lines.slice(-6).join("\n");
+  return tail.length > 3000 ? `${tail.slice(-3000)}\n[TRUNCATED]` : tail;
+}
+
 function parseRunnerOutput(stdout: string): GitingestRunnerPayload {
   const trimmed = stdout.trim();
+
+  if (!trimmed) {
+    throw new Error("Failed to parse gitingest output: empty stdout");
+  }
 
   try {
     return JSON.parse(trimmed) as GitingestRunnerPayload;
   } catch {
-    // Some hosted environments can prepend/append extra logs.
-    // Try to recover by extracting the broadest JSON object span.
-    const firstBrace = trimmed.indexOf("{");
-    const lastBrace = trimmed.lastIndexOf("}");
+    // Some hosted environments emit JSON logs line-by-line before the final payload.
+    // Parse each line from bottom-up and pick the first object with a `success` field.
+    const lines = trimmed
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
 
-    if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
-      throw new Error(`Failed to parse gitingest output: ${trimmed}`);
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const line = lines[i];
+      if (!line.startsWith("{") || !line.endsWith("}")) {
+        continue;
+      }
+
+      try {
+        const parsed = JSON.parse(line) as GitingestRunnerPayload;
+        if (typeof parsed.success === "boolean") {
+          return parsed;
+        }
+      } catch {
+        // continue scanning
+      }
     }
 
-    const candidate = trimmed.slice(firstBrace, lastBrace + 1);
-    try {
-      return JSON.parse(candidate) as GitingestRunnerPayload;
-    } catch {
-      throw new Error(`Failed to parse gitingest output: ${trimmed}`);
-    }
+    throw new Error(
+      `Failed to parse gitingest output: ${summarizeOutputForError(trimmed)}`,
+    );
   }
 }
 
@@ -220,7 +255,11 @@ export async function fetchRepoDigest(
             content: result.content || "",
           });
         } catch {
-          reject(new Error(`Failed to parse gitingest output: ${stdout}`));
+          reject(
+            new Error(
+              `Failed to parse gitingest output: ${summarizeOutputForError(stdout)}`,
+            ),
+          );
         }
       });
 
