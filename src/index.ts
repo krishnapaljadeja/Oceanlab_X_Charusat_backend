@@ -5,8 +5,9 @@ import { analyzeRouter } from "./routes/analyze";
 import { qaRouter } from "./routes/qa";
 import { ingestRouter } from "./routes/ingest";
 import { onboardRouter } from "./routes/onboard";
+import { authRouter } from "./routes/auth";
 import { errorHandler } from "./middleware/errorHandler";
-import { testConnection } from "./db/client";
+import { testConnection, ensureAuthTables } from "./db/client";
 
 process.on("uncaughtException", (err) => {
   console.error("[UNCAUGHT EXCEPTION]", err.message);
@@ -36,6 +37,7 @@ app.use("/api", analyzeRouter);
 app.use("/api", qaRouter);
 app.use("/api", ingestRouter);
 app.use("/api", onboardRouter);
+app.use("/api", authRouter);
 
 // 404 handler
 app.use((_req, res) => {
@@ -56,4 +58,5 @@ app.listen(PORT, async () => {
     `[Server] Gemini key: ${process.env.GEMINI_API_KEY ? "✓ loaded" : "✗ missing"}`,
   );
   await testConnection();
+  await ensureAuthTables();
 });

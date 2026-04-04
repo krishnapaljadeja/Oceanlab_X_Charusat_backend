@@ -37,3 +37,25 @@ export async function testConnection(): Promise<void> {
     console.warn("[DB] Server will run without persistence");
   }
 }
+
+export async function ensureAuthTables(): Promise<void> {
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS app_users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+      );
+    `);
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+    console.log("[DB] Auth tables are ready");
+  } catch (error) {
+    console.error("[DB] ensureAuthTables failed:", error);
+  }
+}
