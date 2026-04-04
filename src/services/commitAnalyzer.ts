@@ -7,6 +7,300 @@ import {
 } from "../types";
 import { isBot } from "../utils/botFilter";
 
+const COMMIT_TYPE_MAP: Partial<Record<string, CommitType>> = {
+  feat: "feat",
+  feature: "feat",
+  add: "feat",
+  added: "feat",
+  adds: "feat",
+  adding: "feat",
+  new: "feat",
+  implement: "feat",
+  implemented: "feat",
+  implements: "feat",
+  implementing: "feat",
+  introduce: "feat",
+  introduced: "feat",
+  introduces: "feat",
+  introducing: "feat",
+  fix: "fix",
+  fixed: "fix",
+  fixes: "fix",
+  fixing: "fix",
+  bug: "fix",
+  bugfix: "fix",
+  hotfix: "fix",
+  patch: "fix",
+  patched: "fix",
+  patches: "fix",
+  patching: "fix",
+  revert: "fix",
+  reverted: "fix",
+  reverts: "fix",
+  reverting: "fix",
+  perf: "refactor",
+  style: "refactor",
+  refactor: "refactor",
+  ref: "refactor",
+  cleanup: "refactor",
+  cleaned: "refactor",
+  clean: "refactor",
+  simplify: "refactor",
+  simplified: "refactor",
+  simplif: "refactor",
+  restructure: "refactor",
+  reorganize: "refactor",
+  reorganised: "refactor",
+  rewrite: "refactor",
+  rework: "refactor",
+  improve: "refactor",
+  improved: "refactor",
+  improves: "refactor",
+  improving: "refactor",
+  optimize: "refactor",
+  optimised: "refactor",
+  optimized: "refactor",
+  rename: "refactor",
+  renamed: "refactor",
+  remove: "refactor",
+  removed: "refactor",
+  extract: "refactor",
+  migrate: "refactor",
+  migrated: "refactor",
+  switch: "refactor",
+  change: "refactor",
+  changed: "refactor",
+  adjust: "refactor",
+  adjusted: "refactor",
+  tweak: "refactor",
+  tweaked: "refactor",
+  revamp: "refactor",
+  overhaul: "refactor",
+  test: "test",
+  tests: "test",
+  spec: "test",
+  docs: "docs",
+  doc: "docs",
+  readme: "docs",
+  changelog: "docs",
+  documentation: "docs",
+  document: "docs",
+  comment: "docs",
+  annotate: "docs",
+  license: "docs",
+  copyright: "docs",
+  typo: "docs",
+  ci: "infra",
+  cd: "infra",
+  build: "infra",
+  deploy: "infra",
+  release: "infra",
+  tag: "infra",
+  publish: "infra",
+  workflow: "infra",
+  pipeline: "infra",
+  docker: "infra",
+  dockerfile: "infra",
+  terraform: "infra",
+  helm: "infra",
+  kubernetes: "infra",
+  k8s: "infra",
+  chore: "deps",
+  deps: "deps",
+  dep: "deps",
+  bump: "deps",
+  upgrade: "deps",
+  update: "deps",
+  updated: "deps",
+  updating: "deps",
+  dependency: "deps",
+  dependencies: "deps",
+  package: "deps",
+  yarn: "deps",
+  npm: "deps",
+  pip: "deps",
+  cargo: "deps",
+  gemfile: "deps",
+};
+
+function classifyToken(token: string): CommitType | null {
+  return COMMIT_TYPE_MAP[token] || null;
+}
+
+function classifyText(text: string): CommitType | null {
+  const compact = text.toLowerCase().replace(/[_/.-]+/g, " ");
+
+  const typeOrder: Array<{ type: CommitType; patterns: RegExp[] }> = [
+    {
+      type: "feat",
+      patterns: [
+        /\b(feat|feature|add|added|adds|adding|new|implement|implemented|implements|implementing|introduce|introduced|introduces|introducing)\b/,
+      ],
+    },
+    {
+      type: "fix",
+      patterns: [
+        /\b(fix|fixed|fixes|fixing|bug|bugfix|hotfix|patch|patched|patches|patching|resolve|resolved|resolves|resolving|repair|repaired|repairs|repairing|correct|corrected|corrects|correcting|address|addressed|addresses|addressing|prevent|prevented|prevents|preventing|avoid|avoided|avoids|avoiding|revert|reverted|reverts|reverting|error|issue|crash|exception|panic|regression)\b/,
+      ],
+    },
+    {
+      type: "test",
+      patterns: [/\b(test|tests|testing|tested|spec|specs|coverage|assert)\b/],
+    },
+    {
+      type: "docs",
+      patterns: [/\b(doc|docs|readme|changelog|documentation|document|comment|annotate|license|copyright|typo)\b/],
+    },
+    {
+      type: "infra",
+      patterns: [
+        /\b(ci|cd|deploy|deployment|docker|dockerfile|build|workflow|pipeline|release|tag|publish|version bump|bump version|terraform|helm|k8s|kubernetes)\b/,
+      ],
+    },
+    {
+      type: "deps",
+      patterns: [
+        /\b(bump|upgrade|update|updated|updating|dependency|dependencies|deps|chore|yarn|npm|pip|cargo|gemfile|package lock)\b/,
+      ],
+    },
+    {
+      type: "refactor",
+      patterns: [
+        /\b(refactor|refactored|refactoring|cleanup|clean up|cleaned up|restructure|reorganized?|reorganised?|rewrite|rewrote|rework|improve|improved|improves|improving|optimiz(?:e|ed|es|ing)|simplif(?:y|ied|ies|ying)|rename|renamed|remove|removed|extract|migrate|migrated|switch|change|changed|adjust|adjusted|tweak|tweaked|revamp|overhaul)\b/,
+      ],
+    },
+  ];
+
+  for (const group of typeOrder) {
+    if (group.patterns.some((pattern) => pattern.test(compact))) {
+      return group.type;
+    }
+  }
+
+  const directTokens = compact.split(/\s+/);
+  for (const token of directTokens) {
+    const type = classifyToken(token);
+    if (type) return type;
+  }
+
+  return null;
+}
+
+function classifyMergeBranch(message: string): CommitType | null {
+  const lower = message.toLowerCase();
+  const candidates = [
+    ...lower.matchAll(/merge (?:branch|pull request)[^\n]*?(?:from\s+)?(?:['"])?([a-z0-9._/\-]+)(?:['"])?/g),
+    ...lower.matchAll(/from\s+([a-z0-9._/\-]+)\s+into\s+/g),
+    ...lower.matchAll(/into\s+([a-z0-9._/\-]+)(?:\s|$)/g),
+  ].map((match) => match[1]);
+
+  for (const candidate of candidates) {
+    const type = classifyText(candidate);
+    if (type) return type;
+  }
+
+  return null;
+}
+
+function classifyFromFiles(filenames: string[]): CommitType | null {
+  if (filenames.length === 0) return null;
+
+  const hasTestFile = filenames.some((f) =>
+    /(\.(test|spec)\.[jt]sx?$|__tests__|\/tests?\/|_test\.[a-z]+$|_spec\.[a-z]+$|test\.[a-z]+$)/i.test(
+      f,
+    ),
+  );
+  if (hasTestFile) return "test";
+
+  const hasDocFile = filenames.some((f) =>
+    /(\.(md|markdown|txt|rst|adoc)$|^docs?\/|readme|changelog|license)/i.test(
+      f,
+    ),
+  );
+  if (hasDocFile) return "docs";
+
+  const hasInfraFile = filenames.some((f) =>
+    /(^\.github\/|dockerfile|\.ya?ml$|makefile$|^\.circleci\/|^\.travis\/|jenkinsfile|^helm\/|^k8s\/|^terraform\/|^infra\/|^deploy\/|\.env|vite\.config|tailwind\.config|tsconfig|package\.json|pnpm-lock|yarn\.lock|package-lock\.json)/i.test(
+      f,
+    ),
+  );
+  if (hasInfraFile) return "infra";
+
+  const hasDepsFile = filenames.some((f) =>
+    /(package(-lock)?\.json$|yarn\.lock$|pnpm-lock|go\.(sum|mod)$|requirements.*\.txt$|pipfile(\.lock)?$|cargo\.(toml|lock)$|gemfile(\.lock)?$|pom\.xml$|gradle\.(kts|properties)$)/i.test(
+      f,
+    ),
+  );
+  if (hasDepsFile) return "deps";
+
+  return null;
+}
+
+function inferTypeFromNeighbors(
+  commits: ProcessedCommit[],
+  index: number,
+): CommitType | null {
+  const scores: Record<Exclude<CommitType, "unknown">, number> = {
+    feat: 0,
+    fix: 0,
+    refactor: 0,
+    infra: 0,
+    test: 0,
+    docs: 0,
+    deps: 0,
+  };
+
+  for (let offset = 1; offset <= 3; offset += 1) {
+    const weight = 4 - offset;
+    const previous = commits[index - offset];
+    const next = commits[index + offset];
+
+    if (previous && previous.type !== "unknown") {
+      scores[previous.type] += weight;
+    }
+    if (next && next.type !== "unknown") {
+      scores[next.type] += weight;
+    }
+  }
+
+  const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  const [bestType, bestScore] = ranked[0] || [null, 0];
+  const secondScore = ranked[1]?.[1] || 0;
+
+  if (!bestType) return null;
+  if (bestScore >= 4 && bestScore >= secondScore + 2) {
+    return bestType as Exclude<CommitType, "unknown">;
+  }
+
+  return null;
+}
+
+function getDominantKnownType(
+  commits: ProcessedCommit[],
+): Exclude<CommitType, "unknown"> | null {
+  const counts: Record<Exclude<CommitType, "unknown">, number> = {
+    feat: 0,
+    fix: 0,
+    refactor: 0,
+    infra: 0,
+    test: 0,
+    docs: 0,
+    deps: 0,
+  };
+
+  commits.forEach((commit) => {
+    if (commit.type !== "unknown") {
+      counts[commit.type] += 1;
+    }
+  });
+
+  const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const [bestType, bestCount] = ranked[0] || [null, 0];
+
+  if (!bestType || bestCount <= 0) return null;
+  return bestType as Exclude<CommitType, "unknown">;
+}
+
 // Classify a commit message into a CommitType.
 // Uses a four-tier strategy so that as few commits as possible fall through
 // to "unknown":
@@ -16,146 +310,99 @@ import { isBot } from "../utils/botFilter";
 //   4. Changed-file path heuristics (*.test.ts, Dockerfile, package-lock…)
 function classifyCommit(message: string, filenames: string[] = []): CommitType {
   const firstLine = message.split("\n")[0].trim();
-  const msg = firstLine.toLowerCase();
+  const headline = firstLine.toLowerCase();
+  const fullText = message.toLowerCase();
 
   // ── 1. Conventional commit prefix ──────────────────────────────────────────
   // Matches: type:, type(scope):, type!:, type(scope)!:
-  const conventionalMatch = msg.match(/^(\w+)(?:\([^)]*\))?!?\s*:/);
+  const conventionalMatch = headline.match(/^(\w+)(?:\([^)]*\))?!?\s*:/);
   if (conventionalMatch) {
     const prefix = conventionalMatch[1];
-    const conventionalMap: Partial<Record<string, CommitType>> = {
-      feat: "feat",
-      feature: "feat",
-      add: "feat",
-      new: "feat",
-      fix: "fix",
-      bug: "fix",
-      hotfix: "fix",
-      patch: "fix",
-      revert: "fix",
-      perf: "refactor",
-      style: "refactor",
-      refactor: "refactor",
-      ref: "refactor",
-      cleanup: "refactor",
-      test: "test",
-      tests: "test",
-      spec: "test",
-      docs: "docs",
-      doc: "docs",
-      ci: "infra",
-      cd: "infra",
-      build: "infra",
-      deploy: "infra",
-      release: "infra",
-      chore: "deps",
-      deps: "deps",
-      dep: "deps",
-      bump: "deps",
-      upgrade: "deps",
-    };
-    if (conventionalMap[prefix]) return conventionalMap[prefix]!;
+    const conventionalType = classifyToken(prefix);
+    if (conventionalType) return conventionalType;
   }
 
   // ── 2. Leading verb / noun ──────────────────────────────────────────────────
   if (
-    /^(feat|add|new|implement|introduce|create|support|enable|allow|initial commit|init\b)/.test(
-      msg,
+    /^(feat|feature|add|added|adds|adding|new|implement|implemented|implements|implementing|introduce|introduced|introduces|introducing|create|created|creates|creating|support|supported|supports|supporting|enable|enabled|enables|enabling|allow|allowed|allows|allowing|initial commit|init\b)/.test(
+      headline,
     )
   )
     return "feat";
   if (
-    /^(fix|bug|patch|hotfix|resolve|repair|handle|correct|address|prevent|avoid|revert)/.test(
-      msg,
+    /^(fix|fixed|fixes|fixing|bug|bugfix|hotfix|patch|patched|patches|patching|resolve|resolved|resolves|resolving|repair|repaired|repairs|repairing|handle|handled|handles|handling|correct|corrected|corrects|correcting|address|addressed|addresses|addressing|prevent|prevented|prevents|preventing|avoid|avoided|avoids|avoiding|revert|reverted|reverts|reverting)/.test(
+      headline,
     )
   )
     return "fix";
   if (
-    /^(refactor|restructure|reorganize|cleanup|clean up|clean-up|rewrite|simplify|rename|move|replace|remove|extract|migrate|convert|switch|rework|improve|optimize|use|change|adjust|tweak|revamp|overhaul|deduplicate|dedup)/.test(
-      msg,
+    /^(refactor|refactored|refactoring|restructure|reorganized?|reorganised?|cleanup|clean up|clean-up|cleaned up|rewrite|rewrote|simplify|simplified|rename|renamed|move|moved|replace|replaced|remove|removed|extract|extracted|migrate|migrated|convert|converted|switch|switched|rework|reworked|improve|improved|optimize|optimized|optimise|optimised|use|used|change|changed|adjust|adjusted|tweak|tweaked|revamp|overhaul|deduplicate|dedup)/.test(
+      headline,
     )
   )
     return "refactor";
   if (
-    /^(test|spec|coverage|add test|add spec|unit test|integration test)/.test(
-      msg,
+    /^(test|tests|testing|spec|specs|coverage|add test|add spec|unit test|integration test)/.test(
+      headline,
     )
   )
     return "test";
   if (
-    /^(docs?|readme|changelog|documentation|document|comment|annotate|license|copyright|typo)/.test(
-      msg,
+    /^(docs?|doc|readme|changelog|documentation|document|comment|annotate|license|copyright|typo)/.test(
+      headline,
     )
   )
     return "docs";
   if (
-    /^(ci|cd|deploy|docker|build|github actions|workflow|pipeline|release|tag\b|publish|version bump|bump version)/.test(
-      msg,
+    /^(ci|cd|deploy|deployment|docker|build|github actions|workflow|pipeline|release|tag\b|publish|version bump|bump version|terraform|helm|k8s|kubernetes)/.test(
+      headline,
     )
   )
     return "infra";
   if (
-    /^(bump|upgrade|update dependencies|update deps|update packages|dependency|deps|chore|yarn|npm|pip|cargo|gemfile)/.test(
-      msg,
+    /^(bump|upgrade|update|updated|updating|update dependencies|update deps|update packages|dependency|dependencies|deps|chore|yarn|npm|pip|cargo|gemfile)/.test(
+      headline,
     )
   )
     return "deps";
 
+  const mergeType = classifyMergeBranch(message);
+  if (mergeType) return mergeType;
+
   // ── 3. Keyword anywhere in first line ──────────────────────────────────────
   // Order matters: more specific checks first so they win over broader ones
-  if (/\b(feat|feature|implement|introduce)\b/.test(msg)) return "feat";
+  if (/\b(feat|feature|implement|introduced?|creating?|adding?)\b/.test(fullText))
+    return "feat";
   if (
-    /\b(fix(e[sd])?|bug|defect|regression|crash|exception|panic|issue|error)\b/.test(
-      msg,
+    /\b(fix(e[sd])?|bug|defect|regression|crash|exception|panic|issue|error|resolve[sd]?|repair[sd]?|patch(ed|es|ing)?)\b/.test(
+      fullText,
     )
   )
     return "fix";
-  if (/\brevert\b/.test(msg)) return "fix";
-  if (/\b(test(s|ing|ed)?|spec(s)?|coverage|assert)\b/.test(msg)) return "test";
-  if (/\b(docs?|readme|changelog|documentation|docstring)\b/.test(msg))
+  if (/\brevert(ed|s|ing)?\b/.test(fullText)) return "fix";
+  if (/\b(test(s|ing|ed)?|spec(s)?|coverage|assert|unit test|integration test)\b/.test(fullText))
+    return "test";
+  if (/\b(docs?|readme|changelog|documentation|docstring|annotat(e|ed|ing))\b/.test(fullText))
     return "docs";
   if (
     /\b(ci|cd|dockerfile|docker|deploy(ment)?|workflow|pipeline|github.?actions?|k8s|kubernetes|helm|terraform)\b/.test(
-      msg,
+      fullText,
     )
   )
     return "infra";
-  if (/\b(bump|upgrade|dependencies|dependency)\b/.test(msg)) return "deps";
-  if (/\b(refactor|cleanup|restructure|reorganize|simplif|rewrite)\b/.test(msg))
+  if (/\b(bump|upgrade|updated?|updating|dependencies|dependency|package\.json|lockfile|chore|yarn|npm|pip|cargo|gemfile)\b/.test(fullText))
+    return "deps";
+  if (/\b(refactor|cleanup|restructure|reorganize|simplif|rewrite|optimiz|revamp|overhaul|rename|replace|remove|extract|migrate)\b/.test(fullText))
     return "refactor";
 
   // ── 4. File-path heuristics ─────────────────────────────────────────────────
+  const fileType = classifyFromFiles(filenames);
+  if (fileType) return fileType;
+
+  // If every changed file is in the same top-level area, infer from that.
+  // This mostly helps non-conventional commits whose messages are too terse.
   if (filenames.length > 0) {
-    const hasTestFile = filenames.some((f) =>
-      /\.(test|spec)\.[jt]sx?$|__tests__|\/tests?\/|_test\.go$|_spec\.rb$/i.test(
-        f,
-      ),
-    );
-    const hasDocFile = filenames.some(
-      (f) =>
-        /\.(md|txt|rst|adoc)$|^docs?\//i.test(f) &&
-        !/package(-lock)?\.json/i.test(f),
-    );
-    const hasInfraFile = filenames.some((f) =>
-      /^\.github\/|dockerfile|\.ya?ml$|makefile|^\.circleci|^\.travis|jenkinsfile|^helm\/|^k8s\/|^terraform\//i.test(
-        f,
-      ),
-    );
-    const hasDepsFile = filenames.some((f) =>
-      /package(-lock)?\.json$|yarn\.lock$|pnpm-lock|go\.(sum|mod)$|requirements.*\.txt$|pipfile(\.lock)?$|cargo\.(toml|lock)$|gemfile(\.lock)?$/i.test(
-        f,
-      ),
-    );
-
-    if (hasTestFile) return "test";
-    if (hasDocFile) return "docs";
-    if (hasInfraFile) return "infra";
-    if (hasDepsFile) return "deps";
-
-    // If every changed file is in the same top-level area, infer from that
-    const allSrc = filenames.every((f) =>
-      /^src\/|^lib\/|^app\/|^pkg\//.test(f),
-    );
+    const allSrc = filenames.every((f) => /^src\/|^lib\/|^app\/|^pkg\//.test(f));
     if (allSrc && filenames.length <= 3) return "refactor";
   }
 
@@ -231,7 +478,7 @@ export function processCommits(
   const detailedMap = new Map<string, RawCommit>();
   detailedCommits.forEach((c) => detailedMap.set(c.sha, c));
 
-  return allCommits
+  const processed = allCommits
     .filter((c) => !isBot(c.author?.login || "", c.commit.author.name))
     .map((c) => {
       const detailed = detailedMap.get(c.sha);
@@ -258,6 +505,31 @@ export function processCommits(
           quality >= 6 || (detailed?.stats?.total || 0) > 200,
       };
     });
+
+  const dominantType = getDominantKnownType(processed) || "feat";
+
+  return processed.map((commit, index) => {
+    if (commit.type !== "unknown") return commit;
+
+    const inferred = inferTypeFromNeighbors(processed, index);
+    const fallbackType = inferred || dominantType;
+
+    const firstLine = commit.message.toLowerCase();
+    const isGenericMerge =
+      /^merge\b/.test(firstLine) ||
+      /\bmerge (branch|pull request)\b/.test(firstLine) ||
+      /\bfrom\b.*\binto\b/.test(firstLine);
+    const isLowSignal =
+      commit.qualityScore <= 4 ||
+      /^(update|changes?|misc|cleanup|chore|wip|temp|fix|refactor|merge)\b/.test(
+        firstLine,
+      );
+
+    return {
+      ...commit,
+      type: isGenericMerge || isLowSignal || !inferred ? fallbackType : inferred,
+    };
+  });
 }
 
 // Normalize contributors — group same person across different emails

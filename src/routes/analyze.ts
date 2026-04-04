@@ -151,7 +151,23 @@ async function runFullAnalysis(
     significantCommits,
   );
 
-  const processedCommits = processCommits(rawCommits, detailedCommits);
+  let processedCommits = processCommits(rawCommits, detailedCommits);
+
+  const unknownCommits = rawCommits.filter(
+    (_, index) => processedCommits[index]?.type === "unknown",
+  );
+  if (unknownCommits.length > 0) {
+    const unresolvedDetails = await fetchCommitDetails(
+      owner,
+      repo,
+      unknownCommits.slice(0, 50),
+    );
+    processedCommits = processCommits(rawCommits, [
+      ...detailedCommits,
+      ...unresolvedDetails,
+    ]);
+  }
+
   const normalizedContributors = normalizeContributors(
     contributors,
     processedCommits,
@@ -425,7 +441,23 @@ analyzeRouter.post(
         significantCommits,
       );
 
-      const processedCommits = processCommits(rawCommits, detailedCommits);
+      let processedCommits = processCommits(rawCommits, detailedCommits);
+
+      const unknownCommits = rawCommits.filter(
+        (_, index) => processedCommits[index]?.type === "unknown",
+      );
+      if (unknownCommits.length > 0) {
+        const unresolvedDetails = await fetchCommitDetails(
+          owner,
+          repo,
+          unknownCommits.slice(0, 50),
+        );
+        processedCommits = processCommits(rawCommits, [
+          ...detailedCommits,
+          ...unresolvedDetails,
+        ]);
+      }
+
       const normalizedContributors = normalizeContributors(
         contributors,
         processedCommits,
