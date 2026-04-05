@@ -5,6 +5,7 @@ import {
   AuthenticatedRequest,
   requireAuth,
   signAuthToken,
+  signEmailVerificationToken,
   verifyEmailVerificationToken,
 } from "../middleware/auth";
 import {
@@ -13,6 +14,7 @@ import {
   findAuthUserById,
   markAuthUserEmailVerified,
 } from "../db/authQueries";
+import { sendSignupEmail } from "../services/mailer";
 
 export const authRouter = Router();
 
@@ -57,20 +59,25 @@ authRouter.post(
       const id = randomUUID();
       const passwordHash = await bcrypt.hash(password, 10);
       await createAuthUser(id, normalizedEmail, passwordHash);
-      await markAuthUserEmailVerified(id);
 
-      const token = signAuthToken({ sub: id, email: normalizedEmail });
-
-      return res.json({
-        success: true,
-        session: {
-          accessToken: token,
-          user: {
-            id,
-            email: normalizedEmail,
-          },
-        },
+      const verificationToken = signEmailVerificationToken({
+        sub: id,
+        email: normalizedEmail,
       });
+      const redirectLink = `${getFrontendUrl()}/login`;
+      const verificationUrl = new URL(
+        "/api/auth/verify-email",
+        getBackendUrl(req),
+      );
+      verificationUrl.searchParams.set("token", verificationToken);
+      verificationUrl.searchParams.set("redirect", redirectLink);
+
+      await sendSignupEmail(normalizedEmail, {
+        confirmationLink: verificationUrl.toString(),
+        redirectLink,
+      });
+
+      return res.json({ success: true, needsConfirmation: true });
     } catch (err) {
       next(err);
     }
@@ -94,6 +101,10 @@ authRouter.post(
       const user = await findAuthUserByEmail(normalizedEmail);
       if (!user) {
         throw new Error("AUTH_INVALID_CREDENTIALS");
+      }
+
+      if (!user.emailVerified) {
+        throw new Error("AUTH_EMAIL_NOT_VERIFIED");
       }
 
       const isMatch = await bcrypt.compare(password, user.passwordHash);

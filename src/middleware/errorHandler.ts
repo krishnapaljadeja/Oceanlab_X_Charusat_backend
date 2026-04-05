@@ -70,8 +70,7 @@ export function errorHandler(
     },
     AUTH_CONFIG_MISSING: {
       status: 500,
-      message:
-        "Server authentication is not configured. Set AUTH_JWT_SECRET.",
+      message: "Server authentication is not configured. Set AUTH_JWT_SECRET.",
       code: "AUTH_CONFIG_MISSING",
     },
     AUTH_INVALID_INPUT: {
@@ -103,6 +102,12 @@ export function errorHandler(
       status: 400,
       message: "Verification link is invalid or expired.",
       code: "AUTH_VERIFY_INVALID",
+    },
+    AUTH_EMAIL_SEND_FAILED: {
+      status: 502,
+      message:
+        "Could not send verification email right now. Please try signing up again in a moment.",
+      code: "AUTH_EMAIL_SEND_FAILED",
     },
     NARRATIVE_PARSE_FAILED: {
       status: 500,
