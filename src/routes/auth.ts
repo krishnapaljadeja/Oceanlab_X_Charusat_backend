@@ -58,26 +58,21 @@ authRouter.post(
 
       const id = randomUUID();
       const passwordHash = await bcrypt.hash(password, 10);
-      await createAuthUser(id, normalizedEmail, passwordHash);
+      await createAuthUser(id, normalizedEmail, passwordHash, true);
 
-      const verificationToken = signEmailVerificationToken({
-        sub: id,
-        email: normalizedEmail,
+      // Email verification disabled for development
+      const token = signAuthToken({ sub: id, email: normalizedEmail });
+
+      return res.json({
+        success: true,
+        session: {
+          accessToken: token,
+          user: {
+            id,
+            email: normalizedEmail,
+          },
+        },
       });
-      const redirectLink = `${getFrontendUrl()}/login`;
-      const verificationUrl = new URL(
-        "/api/auth/verify-email",
-        getBackendUrl(req),
-      );
-      verificationUrl.searchParams.set("token", verificationToken);
-      verificationUrl.searchParams.set("redirect", redirectLink);
-
-      await sendSignupEmail(normalizedEmail, {
-        confirmationLink: verificationUrl.toString(),
-        redirectLink,
-      });
-
-      return res.json({ success: true, needsConfirmation: true });
     } catch (err) {
       next(err);
     }
@@ -103,9 +98,7 @@ authRouter.post(
         throw new Error("AUTH_INVALID_CREDENTIALS");
       }
 
-      if (!user.emailVerified) {
-        throw new Error("AUTH_EMAIL_NOT_VERIFIED");
-      }
+      // Email verification check disabled for development
 
       const isMatch = await bcrypt.compare(password, user.passwordHash);
       if (!isMatch) {

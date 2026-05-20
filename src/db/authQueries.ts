@@ -13,10 +13,11 @@ export async function createAuthUser(
   id: string,
   email: string,
   passwordHash: string,
+  emailVerified: boolean = true,
 ): Promise<void> {
   await prisma.$executeRaw`
-    INSERT INTO app_users (id, email, password_hash, email_verified)
-    VALUES (${id}, ${email}, ${passwordHash}, false)
+    INSERT INTO app_users (id, email, password_hash, email_verified, created_at, updated_at)
+    VALUES (${id}, ${email}, ${passwordHash}, ${emailVerified}, NOW(), NOW())
   `;
 }
 

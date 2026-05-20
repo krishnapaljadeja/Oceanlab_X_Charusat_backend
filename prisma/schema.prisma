@@ -8,6 +8,19 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+model User {
+  id            String   @id
+  email         String   @unique
+  passwordHash  String   @map("password_hash")
+  emailVerified Boolean  @default(false) @map("email_verified")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  analyses Analysis[]
+
+  @@map("app_users")
+}
+
 model Analysis {
   id          Int      @id @default(autoincrement())
   userId      String   @map("user_id")
@@ -19,6 +32,8 @@ model Analysis {
   repoMeta    Json     @map("repo_meta")
   summary     Json
   narrative   Json
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, owner, repo])
   @@map("analyses")
